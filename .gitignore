@@ -1,6 +1,16 @@
 # Python
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.receipt.json
+*.lock
+*.part
+*.storage-state.json
+.env.*
+downloads/
+
 
 # Variables de entorno (por si alguien agrega una .env)
 .env

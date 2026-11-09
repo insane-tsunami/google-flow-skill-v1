@@ -1,4 +1,6 @@
-# Google Flow Skill v2
+# Google Flow Skill — safe durable jobs
+
+> Implementación offline verificada; smoke autenticado pendiente. Los rótulos de modelo en ejemplos no prometen disponibilidad. Cada comando reanuda su manifiesto; nunca repite automáticamente una generación incierta. Cambios de compatibilidad y recuperación: [MAINTENANCE.md](docs/MAINTENANCE.md).
 
 Dile a un agente con terminal local: **“Crea tres imágenes y dos clips sobre esta idea; usa Google Flow y entrégame los archivos.”** El agente prepara los prompts, controla Flow en Chrome, espera la generación y descarga los resultados. También puede ejecutar lotes a partir de un JSON.
 
@@ -16,23 +18,25 @@ Cada trabajo guarda un resultado. Para diez imágenes, crea diez trabajos `image
 
 ## Instalación
 
-Necesitas Python 3.10+ y Google Chrome. Abre un agente en esta carpeta, haz que lea `SKILL.md` y pídele instalarla. Los comandos son:
+Necesitas Python 3.10+, Google Chrome y FFmpeg/ffprobe para video. Lee [la guía de mantenimiento y los gates pendientes](docs/MAINTENANCE.md). Instala en un entorno aislado, sin ejecutar el instalador global legado:
 
 ```powershell
-python setup.py
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+# Activa .venv antes de ejecutar python flow.py
 python flow.py status
 python flow.py login
 ```
 
-`login` abre Chrome para que **tú** inicies sesión. El perfil queda en `session/flowbot-profile/`; nunca lo subas al repositorio ni lo compartas. `status` solo detecta el perfil, no prueba que la sesión siga autenticada. Si las reglas de tu workspace exigen mostrar o aprobar comandos, el agente debe respetarlas.
+`login` abre Chrome para que **tú** inicies sesión. El perfil queda en `session/flowbot-profile/`; nunca lo subas al repositorio ni lo compartas. `status` verifica autenticación real sin generar; perfil presente no implica sesión válida. Si las reglas de tu workspace exigen mostrar o aprobar comandos, el agente debe respetarlas.
 
 Repositorio actual: [BRPLia/google-flow-skill-v1](https://github.com/BRPLia/google-flow-skill-v1). El nombre de la URL conserva “v1”; este código corresponde a la v2.
 
 ## Uso rápido
 
 ```powershell
-python flow.py image --prompt "Three distinct paper flowers on a plain table, vertical 9:16" --name flores
-python flow.py video --prompt "A gentle breeze moves the paper flowers" --start outputs/flores.png --model "Veo 3.1 - Lite" --duration 8s --name flores_clip
+python flow.py image --model "Nano Banana 2.1" --prompt "Three distinct paper flowers on a plain table, vertical 9:16" --name flores
+python flow.py video --prompt "A gentle breeze moves the paper flowers" --start outputs/flores/flores.png --model "Veo 3.1 - Lite" --duration 8s --name flores_clip
 python flow.py batch examples/lote_imagenes.json
 ```
 

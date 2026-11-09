@@ -1,0 +1,33 @@
+name: Offline safety gates
+on:
+  pull_request:
+  push:
+    branches: [main, 'fix/**']
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.14']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - run: |
+          uv venv --python python .venv
+          uv pip install --python .venv/bin/python -r requirements-dev.txt
+          .venv/bin/python -m playwright install --with-deps chromium
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: |
+          .venv/bin/ruff check .
+          .venv/bin/ruff format --check flow.py flow_provider/__init__.py flow_provider/browser.py flow_provider/configure.py flow_provider/download.py flow_provider/project.py flow_provider/prompt.py flow_provider/settings.py flow_provider/selectors.py flow_provider/security.py flow_provider/media.py flow_provider/batch.py flow_provider/safe_ui.py tests
+          .venv/bin/python -m compileall -q flow.py flow_provider
+          .venv/bin/python -m pytest -q
+        env:
+          FLOW_CHROME_PROFILE: ${{ runner.temp }}/synthetic-profile
+          FLOW_UNSAFE_NO_SANDBOX: 'false'

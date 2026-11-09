@@ -272,66 +272,10 @@ async def _await_user_rights_notice(page, timeout_ms: int = 300_000) -> None:
     await page.wait_for_timeout(1_500)
 
 
-async def upload_standalone_image(image_path: str) -> None:
-    """Sube una imagen al canvas directamente (modo imagen). Flujo 5."""
-    page = await get_page()
-    
-    # Cerrar panel de configuración o visores si quedaron abiertos
-    try:
-        settings_panel = page.locator('flow-prompt-box-settings')
-        if await settings_panel.count() > 0 and await settings_panel.first.is_visible():
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(500)
-    except Exception:
-        pass
-
-    # 1. Contar elementos en canvas antes de subir para tener baseline
-    pre_upload_cards = await page.locator('flow-grid-tile-container, flow-tile-container, [aria-roledescription="draggable"]').count()
-    
-    # 2. Esperar al boton de añadir recursos y click
-    await page.wait_for_selector(SEL_ADD_INGREDIENT, state="visible", timeout=15_000)
-    await page.locator(SEL_ADD_INGREDIENT).first.click()
-    await page.locator(SEL_PANEL_RECURSOS).first.wait_for(state="visible", timeout=8_000)
-    
-    # 3. Volver a "Todos": si la última pestaña usada fue "Voces" (al fijar la
-    #    voz nativa), el botón de subir no existe en el panel.
-    await _switch_panel_tab(page, _ALL_TAB_RE)
-
-    # 4. Click en Cargar medios / Subir imagen
-    import re
-    upload_btn = page.locator(SEL_PANEL_RECURSOS).first.locator('button, [role="button"]').filter(
-        has_text=re.compile(r"(Cargar contenido multimedia|Cargar medios|Subir archivo multimedia|Upload media|Subir imagen)", re.IGNORECASE)
-    ).first
-    
-    if await upload_btn.count() == 0:
-        raise Exception("Botón 'Cargar medios' o 'Upload' no encontrado.")
-        
-    async with page.expect_file_chooser(timeout=8_000) as fc_info:
-        await upload_btn.click(force=True)
-    
-    file_chooser = await fc_info.value
-    await file_chooser.set_files(str(image_path))
-
-    # 3b. Aviso de derechos de Google Flow: aparece en la primera subida y bloquea
-    # el upload hasta que el TITULAR de la cuenta lo acepte. NO se confirma por
-    # automatización (es una declaración legal del usuario): se espera a que él
-    # resuelva el diálogo en la ventana abierta.
-    await _await_user_rights_notice(page)
-
-    # 4. Esperar de forma dinámica y rigurosa usando la cuenta previa (Igual que en test-flow 5)
-    await page.wait_for_function(
-        f"""() => {{
-            const cards = document.querySelectorAll('flow-grid-tile-container, flow-tile-container, [aria-roledescription="draggable"]');
-            if (cards.length <= {pre_upload_cards}) return false;
-            const img = cards[0].querySelector('img');
-            return img && img.complete && img.naturalWidth > 0;
-        }}""",
-        timeout=60_000,
-    )
-    
-    # 5. Cerrar el panel presionando Escape una vez confirmado el upload en el canvas
-    await page.keyboard.press("Escape")
-    await page.wait_for_timeout(1000)
+async def upload_standalone_image(image_path: str) -> str:
+    """Shared, scoped PT/ES/EN upload with confirmed attachment identity."""
+    from .safe_ui import upload_reference
+    return await upload_reference(await get_page(), image_path)
 
 
 
@@ -346,49 +290,12 @@ SEL_SLOTS_FIN = 'button.empty-chip:has-text("Fin"), div:text-is("Fin")'
 SEL_UPLOAD_BTN = ':text-is("Subir imagen")'
 SEL_SLOT_LOADED = '.ingredient-bar-container img'
 
-async def upload_frame(file_path: str, slot: str = "initial") -> None:
-    """Sube un frame para modo Fotogramas. slot: 'initial' o 'final'."""
-    page = await get_page()
-
-    target_slot = page.locator(SEL_SLOTS_INICIAR) if slot == "initial" else page.locator(SEL_SLOTS_FIN)
-    await target_slot.first.wait_for(state="visible", timeout=10000)
-
-    initial_count = await page.locator(SEL_SLOT_LOADED).count()
-    await target_slot.first.click()
-    await page.wait_for_timeout(2000)
-
-    async with page.expect_file_chooser(timeout=5000) as fc_info:
-        import re
-        upload_btn = page.locator('button, [role="button"]').filter(
-            has_text=re.compile(r"(Cargar contenido multimedia|Cargar medios|Subir archivo multimedia|Upload media|Subir imagen)", re.IGNORECASE)
-        ).first
-        if await upload_btn.count() == 0:
-            raise Exception("Botón de subida ('Cargar medios' / 'Upload') no encontrado para el slot.")
-        await upload_btn.click(force=True)
-    file_chooser = await fc_info.value
-    await file_chooser.set_files(file_path)
-
-    # La vista previa nueva exige confirmar antes de adjuntar el fotograma.
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-    add_btn = page.locator('button, [role="button"]').filter(
-        has_text=re.compile(r"(Añadir a petición|Agregar a la instrucción|Add to prompt|Add to instruction)", re.IGNORECASE)
-    ).first
-    try:
-        await add_btn.wait_for(state="visible", timeout=8_000)
-    except PlaywrightTimeoutError:
-        pass  # Algunas versiones adjuntan el archivo sin vista previa.
-    else:
-        await add_btn.click()
-        await add_btn.wait_for(state="hidden", timeout=15_000)
-
-    await page.wait_for_function(
-        f"""() => {{
-            const imgs = document.querySelectorAll('{SEL_SLOT_LOADED}');
-            if (imgs.length <= {initial_count}) return false;
-            return [...imgs].some(img => img.complete && img.naturalWidth > 0);
-        }}""",
-        timeout=60000
-    )
+async def upload_frame(file_path: str, slot: str = "initial") -> str:
+    """Shared upload; fail closed when slot/reference cannot be verified."""
+    from .safe_ui import upload_reference
+    if slot not in ("initial", "final"):
+        raise ValueError("Unknown frame slot")
+    return await upload_reference(await get_page(), file_path, slot)
 
 
 async def select_frame_from_project(uuid: str, slot: str = "initial") -> None:
