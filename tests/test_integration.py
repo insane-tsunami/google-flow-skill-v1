@@ -28,6 +28,7 @@ APP = r"""<!doctype html><meta charset="utf-8"><style>flow-prompt-box-settings,f
 <button class="add-menu-trigger" onclick="uploadPanel.hidden=false">+</button>
 <div role="dialog" id="uploadPanel" hidden><div role="option" onclick="file.click()">Carregar multimédia</div><div role="tooltip">Carregar multimédia</div><input id="file" type="file" hidden onchange="attach()"><button id="confirm" onclick="finish()" hidden>Adicionar ao comando</button></div>
 <div class="ingredient-bar-container" id="references"></div><div id="canvas"></div>
+<flow-prompt-box style="display:block"><flow-generation-cost>Generation cost: 1 credits</flow-generation-cost></flow-prompt-box>
 <button data-testid="flow-submit" onclick="generate()">Gerar</button>
 <script>
 window.submits=0;
@@ -83,7 +84,7 @@ async def test_real_cli_reference_generate_download_resume(
     directory.mkdir()
     (directory / "project.json").write_text('{"project":"project-1"}')
 
-    async def navigate(_):
+    async def navigate(_, *, expected):
         pass
 
     from flow_provider import project
@@ -94,6 +95,8 @@ async def test_real_cli_reference_generate_download_resume(
     args = flow.build_parser().parse_args(
         [
             "image",
+            "--max-credits",
+            "1",
             "--prompt",
             "Offline synthetic test",
             "--model",
@@ -120,7 +123,7 @@ async def test_real_cli_reference_generate_download_resume(
 @pytest.mark.parametrize("mutation", ["model", "ratio", "count", "reference", "login"])
 async def test_presubmit_drift_never_clicks(page, tmp_path, mutation):
     await app(page)
-    adapter = UIAdapter(tmp_path / "project.json")
+    adapter = UIAdapter(tmp_path / "project.json", max_credits=1)
     adapter.page = page
     job = {
         "model": "Nano Banana 2.1",
@@ -150,7 +153,7 @@ async def test_presubmit_drift_never_clicks(page, tmp_path, mutation):
 @pytest.mark.asyncio
 async def test_unavailable_model_never_clicks(page, tmp_path):
     await app(page)
-    adapter = UIAdapter(tmp_path / "project.json")
+    adapter = UIAdapter(tmp_path / "project.json", max_credits=1)
     adapter.page = page
     with pytest.raises(ValueError, match="discovered.*Nano Banana 2.1"):
         await adapter.configure({"type": "image", "model": "Nano Banana 9"})

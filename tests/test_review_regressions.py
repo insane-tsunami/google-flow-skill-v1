@@ -45,12 +45,12 @@ async def test_failed_initialization_does_not_poison_next_job(tmp_path, monkeypa
     import flow_provider.safe_ui as ui
 
     calls = []
-    fake_page = object()
+    fake_page = type("Page", (), {"url": "https://flow.google.com/project/project-1"})()
 
     async def page():
         return fake_page
 
-    async def create():
+    async def create(*, expected):
         calls.append("create")
         if len(calls) == 1:
             raise OSError("synthetic failure")

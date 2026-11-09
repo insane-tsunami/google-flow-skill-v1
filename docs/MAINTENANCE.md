@@ -18,7 +18,9 @@ PNG realmente decodificado por Pillow e MP4 produzido/decodificado por FFmpeg.
 `TEST_CHROMIUM` permite indicar o executável local. Nenhum teste acessa uma conta
 Google, perfil privado, navegador ativo ou créditos. O sandbox de produção está
 ativado inclusive via `chromium_sandbox=True`; o Chromium efêmero dos testes usa
-os padrões do Playwright. O smoke autenticado abaixo **não foi executado**.
+os padrões do Playwright. Em 2026-11-09 o smoke autenticado separado concluiu
+uma imagem pela CLI e retomou o mesmo job sem novo submit; detalhes em
+`docs/SMOKE-20261109.md`. Testes offline não substituem essa evidência real.
 
 ## Operação e compatibilidade
 
@@ -107,8 +109,23 @@ submit automaticamente, mesmo que isso tenha ocorrido antes do clique real.
   reconciliar **apenas** o ID do asset correto (`asset`, `state: submitted`).
   Se não houver prova, mantenha incerto; criar novo job exige autorização
   explícita para possível gasto duplicado. Não há reset automático.
-- `failed`: terminal, inclusive configuração/auth inválida. Corrija a causa e
-  peça decisão antes de nova execução. Não apague checkpoints para “tentar”.
+- `failed`: terminal por padrão. Após corrigir uma falha conhecida de configuração
+  anterior a qualquer submit, o humano pode autorizar explicitamente a retomada
+  com `--retry-configuration` em `image`, `video` ou `batch`, mantendo a mesma
+  entrada, nome, projeto e `--out`. Não apague o manifesto nem crie outro projeto.
+  A opção não integra os jobs nem altera seu fingerprint. Só recupera erros
+  `configuration_or_authentication` ou códigos de configuração explicitamente
+  permitidos de `safe_ui`, com pelo menos uma tentativa de configuração, sem
+  chave de tentativa `submit` (mesmo zero), sem `asset`/`result` e sem saída
+  existente. Incerteza, submit, download, integridade e conflitos não autorizam
+  nova geração. Todos os contadores são preservados; orçamento esgotado exige
+  aumentar explicitamente `--max-attempts` (até 10), sem override da opção.
+  O histórico `configuration_recoveries` guarda apenas código público anterior e
+  contador de configuração, nunca campos privados de diagnóstico. Cada execução
+  autorizada faz no máximo uma nova tentativa de configuração por job.
+  Exemplo: `python flow.py batch lote.json --retry-configuration --max-attempts 4
+  --max-credits 1` (acrescente `--direct-mode` somente se autorizado). Depois da
+  configuração validada, o submit continua sujeito às aprovações normais.
 - `pending` com `dependency_unavailable`: o dependente não executou.
 
 Tentativas de download têm limite persistente 1–10 (`--max-attempts`), backoff
@@ -121,7 +138,7 @@ sem nova tentativa nem geração. Destino preexistente ou symlink sem asset conh
 bloqueia antes de configurar/submeter. Recibos com asset, caminho ou hash incorretos
 não são recuperados. Configuração
 interrompida pode retomar dentro do mesmo orçamento; configuração inválida é
-terminal. Submit tem no máximo uma tentativa por job. Checkpoint truncado,
+terminal sem a autorização explícita restrita descrita acima. Submit tem no máximo uma tentativa por job. Checkpoint truncado,
 manifesto divergente e outputs repetidos bloqueiam. Sobras `.part` não contam
 como resultado, nunca são procuradas como fallback.
 
@@ -147,10 +164,10 @@ outro asset. Requer filesystem com hard links; se não suportado, falha seguro.
 
 | Issue | Prova automatizada | Gate externo não executado |
 |---|---|---|
-| #1 | Chromium PT-PT/PT-BR/ES/EN, option/tooltip/ambiguidades; fluxo sintético referência → geração → download | CLI em conta autenticada, UI PT, referência Nano Banana |
-| #2 | Modelo novo/exato/ausente, drift modelo/ratio/count/referência/login, nenhum clique de submit em erro | Descoberta da conta atual e smoke autorizado |
-| #3 | Dois processos, morte abrupta/lock residual, Chrome lock sintético preservado, flags sandbox e auth DOM | Login/sessão expirada/rede contra Google real; Windows |
-| #4 | Download real Chromium interceptado, nomes repetidos, HTML/asset incorreto, decode PNG/MP4/truncado | Asset real Google e variantes DOM do submenu |
+| #1 | Chromium PT-PT/PT-BR/ES/EN; CLI real PT-BR texto → imagem → download | Referência real Nano Banana e demais variantes de idioma |
+| #2 | Descoberta real Nano Banana 2.1, custo visível 0, releitura pré-submit; drift offline bloqueado | Outros modelos/contas e vídeo reais |
+| #3 | Conta /u/1/ autenticada na CLI; locks e sandbox; falhas offline | Sessão expirada/rede real; Windows |
+| #4 | Asset real Google baixado, decode/hash/recibo; submenu original 1K real | Vídeo real e demais variantes de submenu |
 | #5 | Crash configuração/submit/download, duas retomadas, hash/ausência/corrupção, dependência, limites | Reconciliação humana de resultado incerto real |
 
 Primeira suite adicionada falhou no baseline (20 casos: módulos de segurança
@@ -159,8 +176,9 @@ reprovaram problemas concretos; foram acrescentadas regressões RED/GREEN para
 preflight dos decoders, Python 3.10, inicialização de projeto, espera de asset,
 recuperação no limite 1 e conflitos de destino. O deadline após o evento de download
 também teve regressão falhando antes de ser corrigido. A suíte final executada
-**diretamente no terminal Hermes**, fora do sandbox Codex, passou **56/56** em
-Python 3.14.7 e **56/56** em Python 3.10.22. O guard de symlink também é testado
+**diretamente no terminal Hermes**, fora do sandbox Codex, passou **178/178** em
+Python 3.14.7 e **178/178** em Python 3.10.22 após as correções do smoke.
+O guard de symlink também é testado
 pelo entrypoint `prepare_jobs` + `Runner`: validar o caminho lexical **antes** de
 resolver evita apagar a identidade de um link para destino ausente, inclusive
 links no diretório do projeto. Os dois casos falharam antes da correção e depois
@@ -169,14 +187,86 @@ sandbox Codex (`setsockopt: Operation not permitted`) não foram contados como
 aprovação; a execução válida usou navegador efêmero offline fora desse sandbox.
 Integração sintética não substitui o
 smoke da conta. `ci-offline.yml` contém os gates para Python 3.10 e 3.14.
-**CI remoto bloqueado:** o OAuth disponível não tem scope `workflow`; GitHub
-rejeitou o push quando o arquivo estava em `.github/workflows/offline.yml`.
-SSH também não autenticou. O template foi preservado na raiz para permitir
-publicar o restante sem alterar credenciais ou permissões da conta. Um mantenedor
-com autorização `workflow` precisa instalar esse template em
-`.github/workflows/offline.yml`; depois verificar os checks no SHA real do PR.
-Não existe CI remoto aprovado enquanto esse gate não for instalado/executado.
+**CI remoto vigente:** o workflow `.github/workflows/offline.yml` está instalado.
+A evidência local `outputs/authenticated-smoke-20261109/evidence.json` registra
+quatro checks remotos verdes (push/PR, Python 3.10/3.14) no SHA
+`6b191dd0f3ff959a610a61c6a237d72249366951`. Isso valida aquele SHA anterior;
+as alterações locais PR6 ainda precisam dos próprios checks e revisão.
 Não fechar issues nem mergear só por CI: revisão independente e gates humanos
 continuam obrigatórios. Para smoke futuro, obter autorização de custo, não tocar
 no perfil piloto e usar um perfil de teste humano dedicado. Registrar somente
 modelo/configuração/asset sanitizados e integridade, nunca sessão privada.
+
+
+## PR6: conta, modo direto e aprovação de créditos
+
+`FLOW_ACCOUNT_INDEX=1` navega explicitamente para
+`https://flow.google.com/u/1/` (a barra final é necessária na home atual).
+Rotas de projeto canônicas `flow.google.com/u/1/project/...` e redirects
+`labs.google/fx/tools/flow/u/1/project/...` preservam o escopo. A URL é verificada antes
+ de criar projeto, após criação, ao retomar e imediatamente antes do submit.
+O índice (inclusive ausência explícita) é capturado no adaptador e passado
+aos helpers; mudanças posteriores no ambiente não alteram a conta. Páginas
+em cache são verificadas antes de configuração, prompt ou upload.
+Autenticação não identifica nem autoriza a conta pedida. Sem variável, o caminho
+padrão anterior continua disponível. `project.json` persiste `account_index`;
+retomar sob outro índice (inclusive escopo ausente versus explícito) bloqueia
+antes de abrir navegador. Projetos legados sem escopo só retomam sem índice
+explícito; não atribuir uma conta a eles por inferência.
+
+`--direct-mode` autoriza clicar no botão exato `Agente`/`Agent`, que pode
+expor diretamente as configurações, ou oferecer `Direto`/`Direct`. Na UI observada
+o mesmo botão permanece visível com `aria-pressed=false`; chamadas repetidas
+não o ativam novamente. A barra lateral é fechada somente por seu botão local
+`Fechar`, com opt-in, nunca por aprovações de agente. A transição
+exige o gatilho de configurações e o painel `flow-prompt-box-settings` com
+controle de família de modelos; ausência de Agente sozinha não é prova. Sem opt-in, modo Agente bloqueia com
+`agent_mode_requires_direct_mode_opt_in` no relatório sanitizado. O controle
+`tune` do agente nunca é interpretado como configurações de modelo. PT-BR usa
+`Gatilho de configurações`; PT-PT usa `Acionador de definições`. DOM desconhecido
+ou ambíguo permanece bloqueado, inclusive após a transição autorizada.
+
+Todo submit exige `--max-credits N` explícito, finito e não negativo (limite por
+job, não orçamento total do lote). Configuração sem aprovação bloqueia antes de
+criar projeto. Na UI real observada o custo vem de
+`flow-prompt-box-settings > div > flow-credit-cost-label.settings-credit-cost`,
+como `A geração vai usar 0 créditos`. É relido antes de fechar o painel e do
+submit. O contrato alternativo dedicado `flow-generation-cost` permanece
+suportado no compositor ativo, fora de editores, inputs e conteúdo editável, como rótulo
+explícito `Generation cost: N credits`, `Custo da geração: N créditos`,
+`Custo de geração: N créditos` ou `Coste de generación: N créditos`.
+Saldo da conta e preço inferido do modelo não são custo confirmado. Ausência,
+ambiguidade, formato desconhecido, custo acima da aprovação ou alteração entre
+configuração e submit bloqueiam. Nenhuma exceção para smoke/fixtures.
+A extração é deliberadamente restrita; outro formato exige evidência sanitizada
+e regressão antes de ampliar suporte. Texto do prompt, saldo da conta e valores
+em chips editáveis nunca satisfazem o gate.
+
+Exemplo para um humano autorizado no desktop dedicado:
+`FLOW_ACCOUNT_INDEX=1 python flow.py image --model 'RÓTULO EXATO' --name smoke \
+--prompt 'Uma paisagem' --direct-mode --max-credits 1`.
+Não executar se o custo/modelo/conta não puderem ser verificados. O gate humano
+continua: no máximo um submit autorizado, validar decode/hash e retomar sem gerar.
+Os testes PR6 usam mocks/Chromium efêmero offline; evidência RED/GREEN local em
+`scratch/pr6/`, sem acesso Google nem uso intencional de perfil privado.
+
+Correções de revisão: fixtures DOM Chromium offline em `tests/test_blocker_dom.py`
+e `tests/test_live_safe_ui.py`; execução final real fora do sandbox: 178 testes
+aprovados em cada versão Python. Erros de lançamento no sandbox Codex não foram
+contados como aprovação. A CLI `status` autenticou explicitamente `/u/1/`, e a
+CLI de imagem concluiu geração/download/retomada. Ver `docs/SMOKE-20261109.md`.
+
+### Retomada explícita de download conhecido
+
+`--retry-download ASSET_ID` está disponível em `image`, `video` e `batch`, com
+padrão `None`, fora dos jobs e do fingerprint. Use a mesma entrada e diretório:
+`python flow.py batch lote.json --retry-download 6ccbc008-b60f-4611-9dff-665377e09ba5`.
+Só recupera `failed` com esse ID exato validado e erro
+`invalid_media_or_identity` ou `download_attempts_exhausted`, `attempts.submit`
+inteiro exatamente 1 e `attempts.download` inteiro entre 1 e `max_attempts - 1`.
+Saída existente ou symlink bloqueia. O orçamento nunca é reiniciado; aumentá-lo
+exige `--max-attempts` explícito, dentro de 1–10. A transição é somente para
+`submitted`, preservando asset e tentativas, sem configurar ou submeter novamente.
+`download_recoveries` retém apenas código público e contador anterior sanitizados.
+Estado incerto, asset diferente, integridade e orçamento esgotado continuam
+bloqueados; a opção não substitui validação de recibo/arquivo nem corrige o DOM.

@@ -43,6 +43,7 @@ LABELS = {
         "Select model family",
         "Seleccionar familia de modelos",
     ],
+    "home": ["Página inicial", "Início", "Home", "Inicio"],
     "new_project": [
         "Novo projeto",
         "Projeto novo",
@@ -61,7 +62,7 @@ LABELS = {
     "login": ["Iniciar sessão", "Fazer login", "Sign in", "Iniciar sesión"],
 }
 STRUCTURE = {
-    "settings": "button:has(span.model-select-trigger-content), button.settings-trigger",
+    "settings": "button:has(span.model-select-trigger-content):not(flow-prompt-box-settings *), button.settings-trigger:not(flow-prompt-box-settings *)",
     "add": "button.add-menu-trigger",
     "model": "button:has(span.model-select-trigger-content)",
     "more": 'button:has(:is(i,mat-icon):text-is("more_vert"))',

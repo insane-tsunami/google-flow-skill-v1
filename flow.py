@@ -13,7 +13,7 @@ from playwright.async_api import Error as BrowserError
 from flow_provider import browser, settings
 from flow_provider.batch import Runner
 from flow_provider.media import identifier, lexical_output
-from flow_provider.project import FLOW_BASE_URL
+from flow_provider.project import flow_url, verify_account
 from flow_provider.safe_ui import UIAdapter
 from flow_provider.security import auth_state
 
@@ -78,13 +78,15 @@ async def check_session(login=False):
     try:
         page = await browser.get_page()
         try:
-            response = await page.goto(FLOW_BASE_URL, wait_until="domcontentloaded", timeout=60000)
+            response = await page.goto(flow_url(), wait_until="domcontentloaded", timeout=60000)
             if response and response.status >= 400:
                 return "network_error"
         except BrowserError:
             return "network_error"
         for _ in range(240 if login else 10):
             state = await auth_state(page)
+            if state == "authenticated":
+                verify_account(page.url)
             if state == "authenticated" or (state == "login_required" and not login):
                 return state
             await asyncio.sleep(1)
@@ -116,13 +118,32 @@ async def execute(args):
         job = {
             k: v
             for k, v in vars(args).items()
-            if k not in ("cmd", "out", "max_attempts") and v is not None
+            if k
+            not in (
+                "cmd",
+                "out",
+                "max_attempts",
+                "direct_mode",
+                "max_credits",
+                "retry_configuration",
+                "retry_download",
+            )
+            and v is not None
         }
         job["type"] = args.cmd
         data = {"project": args.name, "jobs": [job]}
     directory, jobs = prepare_jobs(data, args.out)
-    adapter = UIAdapter(directory / "project.json")
-    runner = Runner(directory / "batch_report.json", jobs, adapter, max_attempts=args.max_attempts)
+    adapter = UIAdapter(
+        directory / "project.json", direct_mode=args.direct_mode, max_credits=args.max_credits
+    )
+    runner = Runner(
+        directory / "batch_report.json",
+        jobs,
+        adapter,
+        max_attempts=args.max_attempts,
+        retry_configuration=args.retry_configuration,
+        retry_download=args.retry_download,
+    )
     try:
         result = await runner.run()
         print(
@@ -164,6 +185,28 @@ def build_parser():
     p.add_argument("jobfile")
     p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--max-attempts", type=int, default=3)
+    for command in ("image", "video", "batch"):
+        sub.choices[command].add_argument(
+            "--retry-download",
+            metavar="ASSET_ID",
+            default=None,
+            help="Retry a failed download of this exact known asset within the existing budget",
+        )
+        sub.choices[command].add_argument(
+            "--retry-configuration",
+            action="store_true",
+            help="Authorize retry of a known failed configuration before any submit; preserves attempts",
+        )
+        sub.choices[command].add_argument(
+            "--direct-mode",
+            action="store_true",
+            help="Authorize exact Agent to Direct button transition",
+        )
+        sub.choices[command].add_argument(
+            "--max-credits",
+            type=float,
+            help="Approve maximum visible credits per generation; required for submit",
+        )
     p = sub.add_parser("clean", help="Explicitly delete one local project only")
     p.add_argument("project")
     p.add_argument("--out", default=str(DEFAULT_OUT))
@@ -182,6 +225,11 @@ def main():
         return 130
     except Exception as error:
         # Browser exceptions can contain signed URLs and DOM; never print them.
+        from flow_provider.safe_ui import ConfigurationError
+
+        if isinstance(error, ConfigurationError):
+            print(f"Operation blocked: {error.code}", file=sys.stderr)
+            return 1
         print(
             f"Operation blocked ({type(error).__name__}); review local state and maintenance guide.",
             file=sys.stderr,

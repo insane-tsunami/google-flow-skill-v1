@@ -1,5 +1,6 @@
 """Kernel-owned profile exclusion; no Chrome lock deletion or PID killing."""
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -68,12 +69,27 @@ async def auth_state(page, *, trusted=False):
         return "login_required"
     if await control(page, "new_project", optional=True) is not None:
         return "authenticated"
-    if "/project/" in page.url and await control(page, "settings", optional=True) is not None:
-        return "authenticated"
+    if "/project/" in page.url:
+        if await control(page, "settings", optional=True) is not None:
+            return "authenticated"
+        # Agent projects expose no direct-model settings. Require the project
+        # shell, home navigation and an actual composer, not a generic tune icon.
+        project = page.locator("flow-project-shell flow-project-page")
+        if (
+            await project.count() == 1
+            and await control(page, "home", optional=True) is not None
+            and await control(page, "editor", optional=True) is not None
+        ):
+            return "authenticated"
     return "unverifiable"
 
 
 async def require_auth(page):
-    state = await auth_state(page)
+    deadline = asyncio.get_running_loop().time() + 15
+    while True:
+        state = await auth_state(page)
+        if state != "unverifiable" or asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.25)
     if state != "authenticated":
         raise ValueError(f"Authentication {state}; run flow.py login for human login")

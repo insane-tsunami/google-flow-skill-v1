@@ -107,6 +107,19 @@ async def discover_models(page):
     return names
 
 
+async def choose_model(menu, model):
+    matches = [
+        item
+        for item in await menu.locator('[role="menuitem"], [role="option"]').all()
+        if await item.is_visible()
+        and await item.is_enabled()
+        and clean(await item.inner_text()) == model
+    ]
+    if len(matches) != 1:
+        raise ValueError("Model selection unresolved or ambiguous")
+    await matches[0].click()
+
+
 async def selected(panel, text):
     locator = (
         panel.get_by_role("radio", name=text, exact=True)
@@ -183,7 +196,11 @@ async def verify_configuration(page, request, refs):
 
 async def asset_map(page):
     found = {}
-    for card in await page.locator(CARDS).all():
+    # The service nests grid wrappers around physical tiles after rendering.
+    # Attribute the innermost card once, while keeping distinct duplicate cards
+    # ambiguous. Do not deduplicate merely by asset ID or choose the newest card.
+    physical_cards = f":is({CARDS}):not(:has(:is({CARDS})))"
+    for card in await page.locator(physical_cards).all():
         ids = set()
         for media in await card.locator("img, video").all():
             value = await media.get_attribute("data-media-id")
@@ -251,7 +268,13 @@ async def upload_reference(page, path, slot=None):
 
 
 class UIAdapter:
-    def __init__(self, project_file):
+    def __init__(self, project_file, *, direct_mode=False, max_credits=None):
+        from .project import account_index
+
+        self.account_index = account_index()
+        self.direct_mode = direct_mode
+        self.max_credits = max_credits
+        self.cost = None
         self.project_file = Path(project_file)
         self.page = None
         self.expected = None
@@ -259,20 +282,34 @@ class UIAdapter:
 
     async def ensure_project(self):
         if self.page is not None:
+            from .project import verify_account
+
+            verify_account(self.page.url, self.account_index)
+            await require_auth(self.page)
             return
         from .project import create_project, navigate_to_project
 
+        data = None
+        if self.project_file.exists():
+            data = json.loads(self.project_file.read_text())
+            if data.get("account_index") != self.account_index:
+                raise ValueError("Persisted project account mismatch")
         page = await browser.get_page()
         new_project = None
         if self.project_file.exists():
             data = json.loads(self.project_file.read_text())
-            await navigate_to_project(identifier(data["project"]))
+            await navigate_to_project(identifier(data["project"]), expected=self.account_index)
         else:
-            project, _ = await create_project()
+            project, _ = await create_project(expected=self.account_index)
             new_project = identifier(project)
         await require_auth(page)
+        from .project import verify_account
+
+        verify_account(page.url, self.account_index)
         if new_project is not None:
-            atomic_json(self.project_file, {"project": new_project})
+            atomic_json(
+                self.project_file, {"project": new_project, "account_index": self.account_index}
+            )
         self.page = page
 
     async def configure(self, job):
@@ -282,10 +319,15 @@ class UIAdapter:
                 raise ConfigurationError(
                     "video_decoder_install_ffmpeg_and_ffprobe_on_PATH", {"missing_tools": missing}
                 )
+        self.require_credit_approval()
         await self.ensure_project()
         await require_auth(self.page)
+        from .project import verify_account
+
+        verify_account(self.page.url, self.account_index)
         if job.get("count", 1) != 1:
             raise ValueError("One asset per job is required")
+        await self.ensure_direct_mode()
         panel = await panel_for(self.page)
         mode = await control(panel, job.get("type", "image"))
         await mode.click()
@@ -305,12 +347,7 @@ class UIAdapter:
         menu = await unique(
             self.page.locator('[role="menu"]:visible, [role="listbox"][data-model-menu]:visible')
         )
-        item = await unique(
-            menu.get_by_role("menuitem", name=model, exact=True).or_(
-                menu.get_by_role("option", name=model, exact=True)
-            )
-        )
-        await item.click()
+        await choose_model(menu, model)
         if job.get("duration"):
             match = re.fullmatch(r"(\d+)\s*s", job["duration"])
             if not match:
@@ -335,19 +372,133 @@ class UIAdapter:
         for key, slot in [("image", None), ("start", "initial"), ("end", "final")]:
             if job.get(key):
                 self.refs.append(await upload_reference(self.page, job[key], slot))
-        return await verify_configuration(self.page, self.expected, self.refs)
+        effective = await verify_configuration(self.page, self.expected, self.refs)
+        self.cost = await self.verify_cost()
+        return effective | {"credits": self.cost}
 
     async def submit(self, job):
+        from .project import verify_account
+
         await require_auth(self.page)
+        verify_account(self.page.url, self.account_index)
+        await self.ensure_direct_mode()
         # Re-read after upload and prompt editing, immediately before click.
         await verify_configuration(self.page, self.expected, self.refs)
+        if await self.verify_cost() != self.cost:
+            raise ConfigurationError("generation_cost_changed", {})
         await (await control(self.page, "settings")).click()
         before = await asset_ids(self.page)
+        verify_account(self.page.url, self.account_index)
         await (await control(self.page, "submit")).click()
         return await new_asset(self.page, before)
 
+    def require_credit_approval(self):
+        value = self.max_credits
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ConfigurationError("explicit_max_credits_required", {})
+
+    async def verify_cost(self):
+        self.require_credit_approval()
+        # A dedicated UI component is the trust boundary. Never search composer
+        # text: prompts, chips and user-authored markup are not cost evidence.
+        composer = await unique(self.page.locator("flow-prompt-box:visible"), optional=True)
+        if composer is None:
+            raise ConfigurationError("generation_cost_unknown", {})
+        # Prefer the observed service component in the visible settings panel.
+        # An invalid service component must never fall back to a cheaper legacy label.
+        safe = (
+            ":not(:is([contenteditable], textarea, input, flow-rich-text-editor, .ProseMirror) *)"
+            ":not(:has([contenteditable], textarea, input, flow-rich-text-editor, .ProseMirror))"
+            ":not([contenteditable])"
+        )
+        panel = await unique(self.page.locator(PANEL), optional=True)
+        service_selector = ":scope > div > flow-credit-cost-label.settings-credit-cost"
+        service = panel.locator(service_selector) if panel is not None else None
+        if service is not None and await service.count():
+            labels = panel.locator(service_selector + safe)
+        else:
+            labels = composer.locator("flow-generation-cost" + safe)
+        try:
+            label = await unique(labels)
+        except ValueError:
+            raise ConfigurationError("generation_cost_unknown", {}) from None
+        text = " ".join((await label.inner_text()).split())
+        match = re.fullmatch(
+            r"(?:(?:Generation cost|Custo da geração|Custo de geração|Coste de generación): "
+            r"|A geração vai usar\s*)(0|[1-9][0-9]*) (?:credits|créditos)",
+            text,
+            re.I,
+        )
+        if not match:
+            raise ConfigurationError("generation_cost_unknown", {})
+        cost = int(match.group(1))
+        if cost > self.max_credits:
+            raise ConfigurationError("generation_cost_exceeds_approval", {})
+        return cost
+
+    async def ensure_direct_mode(self):
+        sidebar = await unique(self.page.locator("flow-agent-panel:visible"), optional=True)
+        if sidebar is not None:
+            if not self.direct_mode:
+                raise ConfigurationError("agent_mode_requires_direct_mode_opt_in", {})
+            # Global Fechar is ambiguous: close only the observed agent sidebar.
+            await (await unique(sidebar.get_by_role("button", name="Fechar", exact=True))).click()
+
+        async def prove_direct():
+            trigger = await control(self.page, "settings")
+            panel = await unique(self.page.locator(PANEL), optional=True)
+            if panel is None:
+                await trigger.click()
+                await self.page.locator(PANEL).wait_for(state="visible", timeout=1500)
+                panel = await unique(self.page.locator(PANEL))
+            await control(panel, "model")
+
+        agent = await unique(
+            self.page.get_by_role("button", name=re.compile(r"^(?:Agente|Agent)$")), optional=True
+        )
+        pressed = await agent.get_attribute("aria-pressed") if agent is not None else None
+        # A persistent inactive chip is normal. Existing generation proof wins
+        # over presence alone; only a confirmed active chip needs toggling.
+        if pressed != "true":
+            try:
+                await prove_direct()
+                return
+            except (ValueError, PlaywrightTimeoutError):
+                if agent is None or pressed == "false":
+                    raise ConfigurationError("direct_mode_unconfirmed", {}) from None
+        if agent is not None:
+            if not self.direct_mode:
+                raise ConfigurationError("agent_mode_requires_direct_mode_opt_in", {})
+            if pressed not in (None, "true"):
+                raise ConfigurationError("direct_mode_unconfirmed", {})
+            await agent.click()
+            direct = await unique(
+                self.page.get_by_role("button", name=re.compile(r"^(?:Direto|Direct)$")),
+                optional=True,
+            )
+            if direct is not None:
+                await direct.click()
+        try:
+            await prove_direct()
+            remaining = await unique(
+                self.page.get_by_role("button", name=re.compile(r"^(?:Agente|Agent)$")),
+                optional=True,
+            )
+            if remaining is not None and await remaining.get_attribute("aria-pressed") != "false":
+                raise ValueError("Agent still active or unknown")
+        except (ValueError, PlaywrightTimeoutError):
+            raise ConfigurationError("direct_mode_unconfirmed", {}) from None
+
     async def download(self, job, asset):
+        from .project import verify_account
+
         await self.ensure_project()
+        verify_account(self.page.url, self.account_index)
         return await download_asset(self.page, job, asset)
 
 
@@ -415,15 +566,22 @@ async def _download_asset(page, job, asset):
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".flow-download-") as temp:
         async with page.expect_download(timeout=remaining()) as event:
             await direct.click(timeout=remaining())
-            # Resolution submenu is optional; require exact match if present.
+            # Service submenus render asynchronously and decorate the original
+            # 1K option with a subtitle. Never substitute an enhanced 2K/4K item.
             menus = page.locator('[role="menu"]:visible')
-            if await menus.count():
-                resolution = job.get("resolution", "720p" if job["type"] == "video" else "1K")
-                choice = await unique(
-                    menus.get_by_role("menuitem", name=resolution, exact=True), optional=True
-                )
-                if choice is not None:
-                    await choice.click(timeout=remaining())
+            resolution = job.get("resolution", "720p" if job["type"] == "video" else "1K")
+            name = re.compile(
+                r"^"
+                + re.escape(resolution)
+                + (r"(?:\s+Tamanho original)?" if resolution == "1K" else "")
+                + r"$"
+            )
+            choices = menus.get_by_role("menuitem", name=name)
+            if await direct.get_attribute("aria-haspopup") == "menu":
+                await choices.wait_for(state="visible", timeout=remaining())
+            choice = await unique(choices, optional=True)
+            if choice is not None:
+                await choice.click(timeout=remaining())
         download = await event.value
         if await asyncio.wait_for(download.failure(), timeout=remaining() / 1000):
             raise OSError("Browser download failed")
