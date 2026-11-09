@@ -112,7 +112,14 @@ submit automaticamente, mesmo que isso tenha ocorrido antes do clique real.
 - `pending` com `dependency_unavailable`: o dependente não executou.
 
 Tentativas de download têm limite persistente 1–10 (`--max-attempts`), backoff
-exponencial limitado a 10 s, e são contadas **antes** de executar. Configuração
+exponencial limitado a 10 s, e são contadas **antes** de executar. A espera pelo
+asset conhecido e controle de download é temporária/retryable, não falha terminal
+prematura. `generation_timeout` por job tem padrão 180 s e limite finito até 600 s;
+o mesmo deadline limita o início e a transferência via navegador. Um recibo local
+válido é recuperado **antes** de verificar orçamento esgotado (inclusive limite 1),
+sem nova tentativa nem geração. Destino preexistente ou symlink sem asset conhecido
+bloqueia antes de configurar/submeter. Recibos com asset, caminho ou hash incorretos
+não são recuperados. Configuração
 interrompida pode retomar dentro do mesmo orçamento; configuração inválida é
 terminal. Submit tem no máximo uma tentativa por job. Checkpoint truncado,
 manifesto divergente e outputs repetidos bloqueiam. Sobras `.part` não contam
@@ -147,7 +154,20 @@ outro asset. Requer filesystem com hard links; se não suportado, falha seguro.
 | #5 | Crash configuração/submit/download, duas retomadas, hash/ausência/corrupção, dependência, limites | Reconciliação humana de resultado incerto real |
 
 Primeira suite adicionada falhou no baseline (20 casos: módulos de segurança
-inexistentes); após implementação passou. Integração sintética não substitui o
+inexistentes); após implementação passou. As duas revisões independentes iniciais
+reprovaram problemas concretos; foram acrescentadas regressões RED/GREEN para
+preflight dos decoders, Python 3.10, inicialização de projeto, espera de asset,
+recuperação no limite 1 e conflitos de destino. O deadline após o evento de download
+também teve regressão falhando antes de ser corrigido. A suíte final executada
+**diretamente no terminal Hermes**, fora do sandbox Codex, passou **56/56** em
+Python 3.14.7 e **56/56** em Python 3.10.22. O guard de symlink também é testado
+pelo entrypoint `prepare_jobs` + `Runner`: validar o caminho lexical **antes** de
+resolver evita apagar a identidade de um link para destino ausente, inclusive
+links no diretório do projeto. Os dois casos falharam antes da correção e depois
+passaram, sem submit ou publicação no destino estrangeiro. Erros de fixture Chromium dentro do
+sandbox Codex (`setsockopt: Operation not permitted`) não foram contados como
+aprovação; a execução válida usou navegador efêmero offline fora desse sandbox.
+Integração sintética não substitui o
 smoke da conta. `ci-offline.yml` contém os gates para Python 3.10 e 3.14.
 **CI remoto bloqueado:** o OAuth disponível não tem scope `workflow`; GitHub
 rejeitou o push quando o arquivo estava em `.github/workflows/offline.yml`.

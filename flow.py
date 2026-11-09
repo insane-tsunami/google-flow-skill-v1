@@ -12,7 +12,7 @@ from playwright.async_api import Error as BrowserError
 
 from flow_provider import browser, settings
 from flow_provider.batch import Runner
-from flow_provider.media import identifier
+from flow_provider.media import identifier, lexical_output
 from flow_provider.project import FLOW_BASE_URL
 from flow_provider.safe_ui import UIAdapter
 from flow_provider.security import auth_state
@@ -46,7 +46,9 @@ def prepare_jobs(data, out):
             raise ValueError("Unsupported ratio")
         if kind == "video" and not job.get("duration") and defaults.get("video_duration"):
             job["duration"] = defaults["video_duration"]
-        job["file"] = str((directory / (name + (".png" if kind == "image" else ".mp4"))).resolve())
+        job["file"] = str(
+            lexical_output(directory / (name + (".png" if kind == "image" else ".mp4")))
+        )
         dependencies = list(job.get("depends_on", []))
         for key in ("image", "start", "end"):
             if job.get(key):

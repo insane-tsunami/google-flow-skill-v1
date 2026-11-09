@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .media import atomic_json, identifier, validate
+from .media import atomic_json, identifier, lexical_output, recover_output, validate
 from .security import ProfileLock
 
 
@@ -68,6 +68,11 @@ class Runner:
             atomic_json(self.path, self.data)
             for job, row in zip(self.jobs, self.data["jobs"]):
                 kind = job.get("type", "image")
+                try:
+                    lexical_output(job["file"])
+                except ValueError:
+                    self.checkpoint(row, "failed", error="unsafe_output_path")
+                    continue
                 if row["state"] == "completed":
                     try:
                         current = validate(row["result"]["file"], kind)
@@ -87,6 +92,10 @@ class Runner:
                     self.checkpoint(row, "pending", error="dependency_unavailable")
                     continue
                 if not row.get("asset"):
+                    destination = Path(job["file"])
+                    if destination.exists() or destination.is_symlink():
+                        self.checkpoint(row, "failed", error="output_destination_exists")
+                        continue
                     self.checkpoint(row, "configuring")
                     row["attempts"]["configure"] = row["attempts"].get("configure", 0) + 1
                     atomic_json(self.path, self.data)
@@ -121,8 +130,16 @@ class Runner:
                         self.checkpoint(row, "uncertain", error="submit_or_identity_unconfirmed")
                         continue
                     self.checkpoint(row, "submitted", asset=asset)
-                # An existing validated output can survive a crash just before
-                # checkpointing; require adapter receipt, never infer from a name.
+                # Recover publication locally before consulting the retry budget.
+                destination = Path(job["file"])
+                if destination.exists() or destination.is_symlink():
+                    try:
+                        result = recover_output(destination, row["asset"], kind)
+                    except ValueError:
+                        self.checkpoint(row, "failed", error="invalid_media_or_identity")
+                    else:
+                        self.checkpoint(row, "completed", result=result)
+                    continue
                 for _ in range(self.maximum):
                     tries = row["attempts"].get("download", 0)
                     if tries >= self.maximum:

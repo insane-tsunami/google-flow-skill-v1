@@ -162,8 +162,8 @@ async def test_real_browser_download_wrong_asset_html_and_names(page, tmp_path):
     await app(page, b"<html>login</html>")
     await page.evaluate("generate()")
     job = {"file": str(tmp_path / "bad.png"), "type": "image"}
-    with pytest.raises(ValueError):
-        await download_asset(page, job, "asset-2")
+    with pytest.raises(TimeoutError):
+        await download_asset(page, job | {"generation_timeout": 0.1}, "asset-2")
     with pytest.raises(ValueError):
         await download_asset(page, job, "asset-1")
     assert not Path(job["file"]).exists()

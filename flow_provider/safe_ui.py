@@ -2,14 +2,17 @@
 
 import asyncio
 import json
+import math
 from pathlib import Path
 import re
 import shutil
 import tempfile
 from urllib.parse import parse_qs, urlsplit
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from . import browser
-from .media import atomic_json, identifier, publish, validate
+from .media import atomic_json, identifier, lexical_output, publish, recover_output, validate
 from .security import require_auth
 from .selectors import control, unique
 
@@ -351,39 +354,67 @@ class UIAdapter:
 async def download_asset(page, job, asset):
     from .security import ProfileLock
 
-    destination = Path(job["file"])
+    destination = lexical_output(job["file"])
     with ProfileLock(destination.parent / ("." + destination.name + ".lock")):
         return await _download_asset(page, job, asset)
 
 
 async def _download_asset(page, job, asset):
     asset = identifier(asset)
-    destination = Path(job["file"])
+    destination = lexical_output(job["file"])
     receipt = destination.with_name(destination.name + ".receipt.json")
-    if destination.exists():
-        if not receipt.exists():
-            raise ValueError("Existing output has no asset receipt")
-        metadata = json.loads(receipt.read_text())
-        if (
-            metadata["asset"] != asset
-            or validate(destination, job["type"])["sha256"] != metadata["sha256"]
-        ):
-            raise ValueError("Existing output/asset integrity mismatch")
-        return metadata
-    cards = await asset_map(page)
-    if asset not in cards:
-        raise ValueError("Known asset absent; refusing latest-card fallback")
-    card = cards[asset]
-    await card.hover()
-    direct = await control(card, "download", optional=True)
-    if direct is None:
-        await (await control(card, "more")).click()
-        menu = await unique(page.locator('[role="menu"]:visible'))
-        direct = await control(menu, "download")
+    timeout = job.get("generation_timeout", 180)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or not 0 < timeout <= 600
+    ):
+        raise ValueError("generation_timeout must be finite and in (0, 600]")
+    if destination.exists() or destination.is_symlink():
+        return recover_output(destination, asset, job["type"])
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
+    def remaining():
+        seconds = deadline - loop.time()
+        if seconds <= 0:
+            raise TimeoutError("Known asset/download action not ready")
+        return seconds * 1000
+
+    async def ready_action():
+        menu_open = False
+        while True:
+            remaining()
+            cards = await asset_map(page)
+            card = cards.get(asset)
+            if card is not None:
+                await card.hover(timeout=remaining())
+                direct = await control(card, "download", optional=True)
+                if direct is not None:
+                    return direct
+                if not menu_open:
+                    more = await control(card, "more", optional=True)
+                    if more is not None:
+                        await more.click(timeout=remaining())
+                        menu_open = True
+                if menu_open:
+                    menu = await unique(page.locator('[role="menu"]:visible'), optional=True)
+                    if menu is not None:
+                        direct = await control(menu, "download", optional=True)
+                        if direct is not None:
+                            return direct
+            await asyncio.sleep(min(0.1, remaining() / 1000))
+
+    # Bound even DOM queries and transient detachments by the same deadline.
+    try:
+        direct = await asyncio.wait_for(ready_action(), timeout=remaining() / 1000)
+    except (TimeoutError, asyncio.TimeoutError, PlaywrightTimeoutError):
+        raise TimeoutError("Known asset/download action not ready") from None
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(dir=destination.parent, prefix=".flow-download-") as temp:
-        async with page.expect_download(timeout=60000) as event:
-            await direct.click()
+        async with page.expect_download(timeout=remaining()) as event:
+            await direct.click(timeout=remaining())
             # Resolution submenu is optional; require exact match if present.
             menus = page.locator('[role="menu"]:visible')
             if await menus.count():
@@ -392,12 +423,12 @@ async def _download_asset(page, job, asset):
                     menus.get_by_role("menuitem", name=resolution, exact=True), optional=True
                 )
                 if choice is not None:
-                    await choice.click()
+                    await choice.click(timeout=remaining())
         download = await event.value
-        if await download.failure():
+        if await asyncio.wait_for(download.failure(), timeout=remaining() / 1000):
             raise OSError("Browser download failed")
         source = Path(temp) / "payload"
-        await download.save_as(source)
+        await asyncio.wait_for(download.save_as(source), timeout=remaining() / 1000)
         # Durable receipt precedes atomic publication, so a process dying after
         # publication can recover the exact known asset rather than regenerate.
         metadata = validate(source, job["type"]) | {

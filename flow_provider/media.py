@@ -18,6 +18,14 @@ def identifier(value):
     return value
 
 
+def lexical_output(path):
+    """Keep output identity lexical; resolving first would erase symlink guards."""
+    target = Path(os.path.abspath(path))
+    if any(part.is_symlink() for part in (target, *target.parents)):
+        raise ValueError("Symlink output paths are not allowed")
+    return target
+
+
 def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -122,9 +130,27 @@ def validate(path, kind):
         raise ValueError("Media decode failed") from exc
 
 
+def recover_output(destination, asset, kind):
+    """Recover only the exact receipt for this canonical output and asset."""
+    destination = lexical_output(destination)
+    receipt = destination.with_name(destination.name + ".receipt.json")
+    try:
+        if destination.is_symlink() or receipt.is_symlink():
+            raise ValueError("Symlink output or receipt")
+        metadata = json.loads(receipt.read_text(encoding="utf-8"))
+        if metadata["asset"] != identifier(asset) or metadata["file"] != str(destination.resolve()):
+            raise ValueError("Receipt asset/path mismatch")
+        current = validate(destination, kind)
+        if any(metadata[key] != value for key, value in current.items()):
+            raise ValueError("Receipt media integrity mismatch")
+        return metadata
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid output receipt") from exc
+
+
 def publish(source, destination, asset, kind):
     asset = identifier(asset)
-    destination = Path(destination)
+    destination = lexical_output(destination)
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if destination.exists():
         raise FileExistsError("Destination already exists; never overwrite an asset")
