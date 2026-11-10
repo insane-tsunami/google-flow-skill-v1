@@ -4,11 +4,13 @@ Configuracion del provider standalone de Google Flow.
 La sesion persistente vive DENTRO de esta skill (session/flowbot-profile),
 para que sea portable: descargar la carpeta, loguearse una vez y listo.
 """
+
 import os
 from pathlib import Path
 
 try:
     from dotenv import load_dotenv
+
     base_dir = Path(__file__).parent.parent.resolve()
     if (base_dir / ".env").exists():
         load_dotenv(base_dir / ".env")
@@ -26,3 +28,7 @@ FLOW_CHROME_PROFILE = os.getenv(
 
 # Modo legacy (no se usa): sesion via storage_state JSON.
 FLOW_SESSION_FILE = os.getenv("FLOW_SESSION_FILE", "")
+
+# Explicit exception for isolated containers without usable kernel sandboxing.
+# Production desktop defaults to Chromium's sandbox, including Playwright's flag.
+FLOW_UNSAFE_NO_SANDBOX = os.getenv("FLOW_UNSAFE_NO_SANDBOX", "false").lower() == "true"

@@ -22,25 +22,33 @@ Lee este archivo completo antes de instalar o ejecutar. Respeta las reglas de te
 Desde la raíz de esta carpeta:
 
 ```powershell
-python setup.py
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+# Activa .venv antes de los comandos siguientes
 python flow.py status
 python flow.py login
 ```
 
-`setup.py` instala dependencias; ejecútalo cuando prepares el entorno o falte un paquete. `status` comprueba que existe un perfil local, **no** garantiza que Google siga autenticado. `login` abre Chrome visible para que el humano inicie sesión; el agente no debe pedir ni guardar contraseñas. Si un sandbox impide ver la ventana, ejecuta el agente en un terminal de escritorio local.
+No ejecutar el instalador global legado `setup.py`. `status` comprueba autenticación real sin generar. Consulta **docs/MAINTENANCE.md**: contiene el contrato vigente de seguridad/retomada, cambios de compatibilidad y gates humanos pendientes. `--model` y `--name` son obligatorios; usar los rótulos exactos descubiertos, sin enum fija. `login` abre Chrome visible para que el humano inicie sesión; el agente no debe pedir ni guardar contraseñas. Si un sandbox impide ver la ventana, ejecuta el agente en un terminal de escritorio local.
 
 ## Elegir operación
 
 | Petición | Acción del agente |
 |---|---|
-| Una imagen desde texto | `python flow.py image --prompt "..." --name nombre` |
-| Imagen con referencia local | `python flow.py image --prompt "..." --image referencia.png --name nombre` |
-| Un video desde texto | `python flow.py video --prompt "..." --name nombre` |
-| Animar un fotograma | `python flow.py video --prompt "..." --start inicio.png --name nombre` |
-| Interpolar inicio y fin | `python flow.py video --prompt "..." --start inicio.png --end fin.png --name nombre` |
+| Una imagen desde texto | `python flow.py image --model "MODELO_EXATO_DA_UI" --prompt "..." --name nombre` |
+| Imagen con referencia local | `python flow.py image --model "MODELO_EXATO_DA_UI" --prompt "..." --image referencia.png --name nombre` |
+| Un video desde texto | `python flow.py video --model "MODELO_EXATO_DA_UI" --prompt "..." --name nombre` |
+| Animar un fotograma | `python flow.py video --model "MODELO_EXATO_DA_UI" --prompt "..." --start inicio.png --name nombre` |
+| Interpolar inicio y fin | `python flow.py video --model "MODELO_EXATO_DA_UI" --prompt "..." --start inicio.png --end fin.png --name nombre` |
 | Dos o más entregables | Construye un JSON y ejecuta `python flow.py batch archivo.json` |
 
-Opciones: `--ratio` (por defecto `9:16`), `--model`, `--out`, `--name`; video admite `--duration 8s` si el modelo ofrece esa duración. Modelos reconocidos por el proveedor actual: imagen `Nano Banana 2 Lite`, `Nano Banana 2`, `Nano Banana Pro`, `Imagen 4`; video `Veo 3.1 - Lite`, `Veo 3.1 - Fast`, `Veo 3.1 - Quality`, `Omni 1.1 Flash`. La disponibilidad real depende de Flow y de la cuenta.
+Seguridad PR6: `FLOW_ACCOUNT_INDEX=1` exige la ruta de cuenta explícita y bloquea
+replay de proyectos de otro ámbito. Generar exige `--max-credits N` (máximo por
+trabajo) y costo visible confirmado; costo desconocido bloquea. `--direct-mode`
+autoriza la transición por Agente/Agent (y Direto/Direct si aparece), verificada por el panel real de generación;
+sin opt-in el modo Agente bloquea. No confundir su botón tune con modelos.
+
+Opciones: `--ratio` (por defecto `9:16`), `--model`, `--out`, `--name`; video admite `--duration 8s` si el modelo ofrece esa duración. Ejemplos históricos (no enum ni garantía de disponibilidad): imagen `Nano Banana 2 Lite`, `Nano Banana 2`, `Nano Banana Pro`, `Imagen 4`; video `Veo 3.1 - Lite`, `Veo 3.1 - Fast`, `Veo 3.1 - Quality`, `Omni 1.1 Flash`. La disponibilidad real depende de Flow y de la cuenta.
 
 Cada trabajo descarga **un archivo**. Para varias variantes o imágenes por lotes, crea varios `jobs` con nombres distintos y `count: 1`; `count > 1` se rechaza para evitar perder resultados.
 
@@ -76,4 +84,4 @@ Ejecuta `python flow.py batch mi_lote.json`. Revisa `outputs/<project>/batch_rep
 
 La automatización usa la interfaz web de Flow; cambios en esa interfaz pueden exigir ajustes de selectores. El agente integrado de Flow también genera medios y lotes; esta skill sirve para dirigir Flow desde un agente externo y guardar archivos locales. No presentes la generación como ilimitada o completamente gratuita.
 
-⚠️ **ADVERTENCIA:** `python flow.py clean nombre_proyecto` borra ese proyecto local de `outputs/`; `python flow.py clean` borra todos los resultados. No ejecutes limpieza sin una solicitud explícita y un objetivo verificado.
+⚠️ **ADVERTENCIA:** `python flow.py clean nombre_proyecto` borra ese proyecto local de `outputs/`; `python flow.py clean` sin proyecto se rechaza. No ejecutes limpieza sin una solicitud explícita y un objetivo verificado.
