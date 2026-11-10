@@ -148,6 +148,23 @@ def recover_output(destination, asset, kind):
         raise ValueError("Invalid output receipt") from exc
 
 
+def prepare_media(source, destination, kind):
+    """Normalize an isolated staging file before receipt creation/publication."""
+    metadata = validate(source, kind)
+    if (
+        kind == "image"
+        and Path(destination).suffix.lower() == ".png"
+        and metadata["format"] != "PNG"
+    ):
+        with Image.open(source) as image:
+            image.load()
+            if image.mode == "CMYK":
+                image = image.convert("RGB")
+            image.save(source, format="PNG")
+        metadata = validate(source, kind)
+    return metadata
+
+
 def publish(source, destination, asset, kind):
     asset = identifier(asset)
     destination = lexical_output(destination)
@@ -158,7 +175,7 @@ def publish(source, destination, asset, kind):
     os.close(fd)
     try:
         shutil.copyfile(source, temp)
-        metadata = validate(temp, kind)
+        metadata = prepare_media(temp, destination, kind)
         with open(temp, "rb") as f:
             os.fsync(f.fileno())
         # Hard-link publishes atomically with exclusive-create semantics. Unlike

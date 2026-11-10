@@ -12,7 +12,15 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import browser
-from .media import atomic_json, identifier, lexical_output, publish, recover_output, validate
+from .media import (
+    atomic_json,
+    identifier,
+    lexical_output,
+    prepare_media,
+    publish,
+    recover_output,
+    validate,
+)
 from .security import require_auth
 from .selectors import control, unique
 
@@ -589,7 +597,7 @@ async def _download_asset(page, job, asset):
         await asyncio.wait_for(download.save_as(source), timeout=remaining() / 1000)
         # Durable receipt precedes atomic publication, so a process dying after
         # publication can recover the exact known asset rather than regenerate.
-        metadata = validate(source, job["type"]) | {
+        metadata = prepare_media(source, destination, job["type"]) | {
             "asset": asset,
             "file": str(destination.resolve()),
         }

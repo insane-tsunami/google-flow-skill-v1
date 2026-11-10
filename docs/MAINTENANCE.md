@@ -152,7 +152,13 @@ heurística ou busca em `~/Downloads` permanece.
 
 Download é evento do navegador provocado pelo controle da card do ID conhecido,
 em destino isolado, sem confiar no nome sugerido. PNG/JPEG/WebP são verificados
-e decodificados; vídeo exige assinatura MP4/WebM, stream, dimensões, duração
+e decodificados. Novas saídas de imagem `.png` são codificadas como PNG real
+antes do recibo e da publicação exclusiva; JPEG/WebP são convertidos no staging
+isolado (CMYK → RGB, transparência preservada). Tamanho/SHA-256 descrevem os
+bytes PNG finais. PNG válido já recebido é preservado byte a byte. Recibos
+legados continuam validando o conteúdo original, sem conversão/regravação na
+retomada; o artefato JPEG do smoke de 2026-11-09 permanece intocado.
+Vídeo exige assinatura MP4/WebM, stream, dimensões, duração
 positiva e decodificação FFmpeg. HTML, vazio e truncamentos são rejeitados.
 Antes da publicação grava-se recibo sanitizado com ID/tipo/tamanho/SHA-256;
 retomada confere o mesmo asset e hash. A saída é publicada atomicamente por
