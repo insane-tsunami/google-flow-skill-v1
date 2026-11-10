@@ -107,6 +107,7 @@ async def test_asset_identity_ambiguity(page):
     await page.set_content(
         '<flow-tile-container><img data-media-id="old"></flow-tile-container><flow-tile-container><img data-media-id="new"></flow-tile-container>'
     )
-    assert await new_asset(page, before, timeout=0.1) == "new"
+    with pytest.raises(ValueError, match="lifecycle baseline"):
+        await new_asset(page, before, timeout=0.1)
     with pytest.raises(ValueError):
         await new_asset(page, set(), timeout=0.1)

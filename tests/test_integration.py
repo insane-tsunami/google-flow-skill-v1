@@ -32,9 +32,17 @@ APP = r"""<!doctype html><meta charset="utf-8"><style>flow-prompt-box-settings,f
 <button data-testid="flow-submit" onclick="generate()">Gerar</button>
 <script>
 window.submits=0;
-function finish(){ references.innerHTML='<img data-media-id="reference-1" src="/reference.png">'; uploadPanel.hidden=true; }
+function finish(){ references.innerHTML='<img data-media-id="reference-1" src="/reference.png">'; canvas.insertAdjacentHTML('beforeend','<flow-tile-container><flow-image-tile><img data-media-id="reference-1" src="/reference.png"></flow-image-tile></flow-tile-container>'); uploadPanel.hidden=true; }
 function attach(){ if(window.requireConfirm) document.getElementById('confirm').hidden=false; else finish(); }
-function generate(){window.submits++; canvas.innerHTML='<flow-tile-container><img data-media-id="asset-1" src="/reference.png"><button aria-label="Download" onclick="location.href=\'/download\'">Download</button></flow-tile-container>';}
+function generate(){
+  window.submits++;
+  canvas.insertAdjacentHTML('beforeend','<flow-tile-container id="generated"><flow-image-tile><p></p><div role="progressbar">39%</div></flow-image-tile></flow-tile-container>');
+  generated.querySelector('p').textContent=document.querySelector('[contenteditable]').innerText;
+  setTimeout(()=>{
+    generated.querySelector('[role=progressbar]').remove();
+    generated.querySelector('flow-image-tile').insertAdjacentHTML('beforeend','<img data-media-id="asset-1" src="/reference.png"><button aria-label="Download" onclick="location.href=\'/download\'">Download</button>');
+  },1200);
+}
 </script>"""
 
 

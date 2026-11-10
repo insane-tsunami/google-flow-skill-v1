@@ -445,17 +445,133 @@ async def asset_ids(page):
     return set(await asset_map(page))
 
 
-async def new_asset(page, before, timeout=180):
+async def stable_asset_baseline(page, refs, *, timeout=30, quiet=1.0):
+    """Wait for owned uploads to reach the gallery, then seal physical cards.
+
+    An unchanged ID set alone misses a pending generation card with no media ID.
+    Keep DOM node identity as well; a quiet window is readiness, not attribution.
+    """
     deadline = asyncio.get_running_loop().time() + timeout
+    previous = None
+    unchanged = asyncio.get_running_loop().time()
     while True:
-        added = (await asset_ids(page)) - before
-        if len(added) > 1:
-            raise ValueError("Multiple new assets: attribution uncertain")
-        if len(added) == 1:
-            return added.pop()
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("Asset identity not confirmed")
-        await asyncio.sleep(0.5)
+        cards = await page.evaluate_handle(
+            "selector => Array.from(document.querySelectorAll(selector))",
+            f":is({CARDS}):not(:has(:is({CARDS})))",
+        )
+        ids = await asset_ids(page)
+        progressing = await page.locator(f":is({CARDS}) [role=progressbar]").count()
+        now = asyncio.get_running_loop().time()
+        same = (
+            previous is not None
+            and ids == previous["ids"]
+            and progressing == previous["progressing"]
+            and await cards.evaluate(
+                "(els, old) => els.length === old.length && els.every((e, i) => e === old[i])",
+                previous["cards"],
+            )
+        )
+        if not same:
+            unchanged = now
+        if previous is not None:
+            await previous["cards"].dispose()
+        previous = {"ids": ids, "cards": cards, "progressing": progressing}
+        if not progressing and set(refs).issubset(ids) and now - unchanged >= quiet:
+            return previous
+        if now >= deadline:
+            await cards.dispose()
+            raise TimeoutError("Pre-submit gallery and uploaded references not stable")
+        await asyncio.sleep(0.1)
+
+
+async def new_asset(page, before, timeout=180, *, kind=None, prompt=None, quiet=1.0):
+    """Bind a newly created generated card through its observed progress lifecycle.
+
+    Never use a unique new ID, latest card, prompt match alone, or media signature
+    as submission proof. Missing lifecycle/type evidence remains uncertain.
+    """
+    if not isinstance(before, dict) or kind not in ("image", "video") or not prompt:
+        raise ValueError("Submission lifecycle baseline and media kind required")
+    deadline = asyncio.get_running_loop().time() + timeout
+    bound = None
+    candidate_ids = set()
+    ready_since = None
+    try:
+        while True:
+            candidates = []
+            for card in await page.locator(f":is({CARDS}):not(:has(:is({CARDS})))").all():
+                if await card.evaluate("(e, old) => old.includes(e)", before["cards"]):
+                    continue
+                if not await card.locator(f"flow-{kind}-tile").count():
+                    continue
+                if await card.locator(
+                    f"flow-{'image' if kind == 'video' else 'video'}-tile"
+                ).count():
+                    raise ValueError("Conflicting media kind: attribution uncertain")
+                candidates.append(card)
+            if len(candidates) > 1:
+                raise ValueError("Multiple generated cards: attribution uncertain")
+            if candidates:
+                card = candidates[0]
+                if bound is None:
+                    # Progress is structural service evidence, not text authored
+                    # in a prompt. Require exact prompt in a separate text node.
+                    progress = card.locator('[role="progressbar"]')
+                    if (
+                        await progress.count() == 1
+                        and await card.get_by_text(prompt, exact=True).count() == 1
+                    ):
+                        bound = await card.element_handle()
+                elif not await card.evaluate("(e, original) => e === original", bound):
+                    raise ValueError("Generated card replaced: attribution uncertain")
+                if bound is not None:
+                    if not await card.locator('[role="progressbar"]').count():
+                        await card.hover(
+                            timeout=max(1, (deadline - asyncio.get_running_loop().time()) * 1000)
+                        )
+                    current = await asset_map(page)
+                    ids = set()
+                    for media in await card.locator("video" if kind == "video" else "img").all():
+                        value = await media.get_attribute("data-media-id")
+                        src = urlsplit(await media.get_attribute("src") or "")
+                        if not value:
+                            value = parse_qs(src.query).get("name", [None])[0]
+                        if not value:
+                            match = re.search(rf"/{kind}/([A-Za-z0-9_-]+)", src.path)
+                            value = match.group(1) if match else None
+                        if value:
+                            value = identifier(value)
+                            owner = current.get(value)
+                            if owner is not None and await owner.evaluate(
+                                "(e, original) => e === original", bound
+                            ):
+                                ids.add(value)
+                    if ids & before["ids"]:
+                        raise ValueError("Preexisting generated identity: attribution uncertain")
+                    candidate_ids.update(ids)
+                    if len(candidate_ids) > 1:
+                        raise ValueError("Multiple generated identities: attribution uncertain")
+                    if len(ids) == 1 and not await card.locator('[role="progressbar"]').count():
+                        now = asyncio.get_running_loop().time()
+                        if ready_since is None:
+                            ready_since = now
+                        if now - ready_since >= quiet:
+                            return next(iter(ids))
+                    else:
+                        ready_since = None
+            else:
+                ready_since = None
+                if bound is not None:
+                    raise ValueError("Generated card disappeared: attribution uncertain")
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("Submission-bound asset identity not confirmed")
+            await asyncio.sleep(0.1)
+    except PlaywrightTimeoutError:
+        raise TimeoutError("Submission-bound asset identity not confirmed") from None
+    finally:
+        await before["cards"].dispose()
+        if bound is not None:
+            await bound.dispose()
 
 
 async def upload_reference(page, path, slot=None):
@@ -689,7 +805,9 @@ class UIAdapter:
         if await self.verify_cost() != self.cost:
             raise ConfigurationError("generation_cost_changed", {})
         await (await control(self.page, "settings")).click()
-        before = await asset_ids(self.page)
+        if sorted(await references(self.page, character)) != sorted(self.refs):
+            raise ConfigurationError("reference_mismatch", {})
+        before = await stable_asset_baseline(self.page, self.refs)
         verify_account(self.page.url, self.account_index)
         await self.verify_project_identity()
         if self.reference_job is not None:
@@ -697,7 +815,9 @@ class UIAdapter:
         if sorted(await references(self.page, character)) != sorted(self.refs):
             raise ConfigurationError("reference_mismatch", {})
         await (await control(self.page, "submit")).click()
-        return await new_asset(self.page, before)
+        return await new_asset(
+            self.page, before, kind=job.get("type", "image"), prompt=job.get("prompt")
+        )
 
     def require_credit_approval(self):
         value = self.max_credits
@@ -847,6 +967,9 @@ async def _download_asset(page, job, asset):
             cards = await asset_map(page)
             card = cards.get(asset)
             if card is not None:
+                other = "image" if job["type"] == "video" else "video"
+                if await card.locator(f"flow-{other}-tile").count():
+                    raise ValueError("Known asset media kind mismatch")
                 await card.hover(timeout=remaining())
                 direct = await control(card, "download", optional=True)
                 if direct is not None:
@@ -877,12 +1000,7 @@ async def _download_asset(page, job, asset):
             # 1K option with a subtitle. Never substitute an enhanced 2K/4K item.
             menus = page.locator('[role="menu"]:visible')
             resolution = job.get("resolution", "720p" if job["type"] == "video" else "1K")
-            name = re.compile(
-                r"^"
-                + re.escape(resolution)
-                + (r"(?:\s+Tamanho original)?" if resolution == "1K" else "")
-                + r"$"
-            )
+            name = re.compile(r"^" + re.escape(resolution) + r"(?:\s+Tamanho original)?" + r"$")
             choices = menus.get_by_role("menuitem", name=name)
             if await direct.get_attribute("aria-haspopup") == "menu":
                 await choices.wait_for(state="visible", timeout=remaining())
