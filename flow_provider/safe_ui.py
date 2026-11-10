@@ -12,6 +12,12 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import browser
+from .elements import (
+    require_observed_character_contract,
+    seal_references,
+    validate_inputs,
+    verify_reference_bytes,
+)
 from .media import (
     atomic_json,
     identifier,
@@ -27,9 +33,7 @@ from .selectors import control, unique
 PANEL = "flow-prompt-box-settings:visible"
 CARDS = 'flow-grid-tile-container, flow-tile-container, [aria-roledescription="draggable"]'
 ATTACHED = (
-    ".ingredient-bar-container img, "
-    "flow-prompt-box button img[data-media-id], "
-    "flow-rich-text-editor .mention-chip[data-mention-id]"
+    ".ingredient-bar-container img, flow-prompt-box button img, flow-rich-text-editor .mention-chip"
 )
 
 
@@ -50,6 +54,7 @@ class ConfigurationError(ValueError):
                         "ratio",
                         "count",
                         "reference_count",
+                        "reference_mode",
                         "duration",
                         "selected",
                         "type",
@@ -160,8 +165,9 @@ async def references(page):
             value = await element.get_attribute("data-media-id") or await element.get_attribute(
                 "data-mention-id"
             )
-            if value:
-                values.append(identifier(value))
+            if not value:
+                raise ValueError("Attached reference identity unverified")
+            values.append(identifier(value))
     if len(values) != len(set(values)):
         raise ValueError("Ambiguous attached references")
     return values
@@ -186,6 +192,15 @@ async def verify_configuration(page, request, refs):
             ]
         ):
             raise ConfigurationError("mode_unconfirmed", evidence)
+    if request.get("reference_mode"):
+        mode = await control(panel, request["reference_mode"])
+        if not any(
+            [
+                await mode.get_attribute(a) in ("true", "on", "active")
+                for a in ("aria-checked", "aria-selected", "aria-pressed", "data-state")
+            ]
+        ):
+            raise ConfigurationError("reference_mode_unconfirmed", {})
     if sorted(await references(page)) != sorted(refs):
         raise ConfigurationError("reference_mismatch", evidence)
     duration = request.get("duration")
@@ -261,6 +276,8 @@ async def upload_reference(page, path, slot=None):
     confirmed = False
     while asyncio.get_running_loop().time() < deadline:
         current = set(await references(page))
+        if not before.issubset(current):
+            raise ValueError("An existing reference was replaced during upload")
         added = current - before
         if len(added) == 1:
             return added.pop()
@@ -276,10 +293,19 @@ async def upload_reference(page, path, slot=None):
 
 
 class UIAdapter:
-    def __init__(self, project_file, *, direct_mode=False, max_credits=None):
+    def __init__(self, project_file, *, direct_mode=False, max_credits=None, project_scope=None):
         from .project import account_index
 
         self.account_index = account_index()
+        self.project_scope = project_scope
+        self.project_id = None
+        self.reference_job = None
+        if project_scope:
+            from .project import explicit_project
+
+            explicit_project(project_scope["project"], self.account_index)
+            if project_scope["account_index"] != self.account_index:
+                raise ValueError("Explicit project account mismatch")
         self.direct_mode = direct_mode
         self.max_credits = max_credits
         self.cost = None
@@ -294,6 +320,7 @@ class UIAdapter:
 
             verify_account(self.page.url, self.account_index)
             await require_auth(self.page)
+            await self.verify_project_identity()
             return
         from .project import create_project, navigate_to_project
 
@@ -302,11 +329,16 @@ class UIAdapter:
             data = json.loads(self.project_file.read_text())
             if data.get("account_index") != self.account_index:
                 raise ValueError("Persisted project account mismatch")
+        if data and self.project_scope and data.get("project") != self.project_scope["project"]:
+            raise ValueError("Persisted project target mismatch")
         page = await browser.get_page()
         new_project = None
         if self.project_file.exists():
             data = json.loads(self.project_file.read_text())
             await navigate_to_project(identifier(data["project"]), expected=self.account_index)
+        elif self.project_scope:
+            new_project = self.project_scope["project"]
+            await navigate_to_project(new_project, expected=self.account_index)
         else:
             project, _ = await create_project(expected=self.account_index)
             new_project = identifier(project)
@@ -314,13 +346,48 @@ class UIAdapter:
         from .project import verify_account
 
         verify_account(page.url, self.account_index)
+        self.project_id = new_project if new_project is not None else identifier(data["project"])
+        self.page = page
+        await self.verify_project_identity()
         if new_project is not None:
             atomic_json(
                 self.project_file, {"project": new_project, "account_index": self.account_index}
             )
         self.page = page
 
+    async def verify_project_identity(self):
+        from .project import verify_project
+
+        if self.project_id is not None:
+            verify_project(self.page.url, self.project_id, self.account_index)
+        title = self.project_scope.get("title") if self.project_scope else None
+        if title is not None:
+            # Observed Flow title is a navigation-header editable input; a
+            # unique exact heading remains supported for older layouts.
+            field = await unique(
+                self.page.locator("flow-navigation-header flow-editable-text input:visible"),
+                optional=True,
+            )
+            if field is not None:
+                if await field.input_value() != title:
+                    raise ValueError("Explicit project title mismatch")
+            else:
+                await unique(self.page.get_by_role("heading", name=title, exact=True))
+
     async def configure(self, job):
+        validate_inputs(job)
+        verify_reference_bytes(job)
+        if job.get("character") or job.get("character_id"):
+            # No observed saved-details identity contract: stop before even
+            # creating a project or opening the dedicated browser profile.
+            require_observed_character_contract(job)
+        if self.page is not None:
+            from .project import verify_account
+
+            verify_account(self.page.url, self.account_index)
+            await self.verify_project_identity()
+        self.reference_job = dict(job)
+        seal_references(self.reference_job)
         if job.get("type") == "video":
             missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
             if missing:
@@ -341,8 +408,11 @@ class UIAdapter:
         await mode.click()
         await choose(panel, job.get("ratio", "9:16"))
         await choose(panel, "x1")
-        if job.get("type") == "video" and (job.get("start") or job.get("end")):
-            await (await control(panel, "frames")).click()
+        reference_mode = job.get("mode") or (
+            "frames" if job.get("start") or job.get("end") else None
+        )
+        if reference_mode:
+            await (await control(panel, reference_mode)).click()
         trigger = await control(panel, "model")
         await trigger.click()
         options = await discover_models(self.page)
@@ -367,6 +437,7 @@ class UIAdapter:
             "ratio": job.get("ratio", "9:16"),
             "count": 1,
             "duration": job.get("duration"),
+            **({"reference_mode": reference_mode} if reference_mode else {}),
         }
         await (await control(self.page, "settings")).click()
         editor = await control(self.page, "editor")
@@ -380,6 +451,10 @@ class UIAdapter:
         for key, slot in [("image", None), ("start", "initial"), ("end", "final")]:
             if job.get(key):
                 self.refs.append(await upload_reference(self.page, job[key], slot))
+        for path in job.get("images", []):
+            self.refs.append(await upload_reference(self.page, path))
+        verify_reference_bytes(self.reference_job)
+        await self.verify_project_identity()
         effective = await verify_configuration(self.page, self.expected, self.refs)
         self.cost = await self.verify_cost()
         return effective | {"credits": self.cost}
@@ -389,6 +464,9 @@ class UIAdapter:
 
         await require_auth(self.page)
         verify_account(self.page.url, self.account_index)
+        await self.verify_project_identity()
+        if self.reference_job is not None:
+            verify_reference_bytes(self.reference_job)
         await self.ensure_direct_mode()
         # Re-read after upload and prompt editing, immediately before click.
         await verify_configuration(self.page, self.expected, self.refs)
@@ -397,6 +475,11 @@ class UIAdapter:
         await (await control(self.page, "settings")).click()
         before = await asset_ids(self.page)
         verify_account(self.page.url, self.account_index)
+        await self.verify_project_identity()
+        if self.reference_job is not None:
+            verify_reference_bytes(self.reference_job)
+        if sorted(await references(self.page)) != sorted(self.refs):
+            raise ConfigurationError("reference_mismatch", {})
         await (await control(self.page, "submit")).click()
         return await new_asset(self.page, before)
 

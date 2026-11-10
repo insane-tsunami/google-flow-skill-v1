@@ -18,6 +18,7 @@ CONFIGURATION_FAILURES = frozenset(
         "configuration_mismatch",
         "mode_unconfirmed",
         "reference_mismatch",
+        "reference_mode_unconfirmed",
         "video_decoder_install_ffmpeg_and_ffprobe_on_PATH",
         "explicit_max_credits_required",
         "generation_cost_unknown",

@@ -68,3 +68,36 @@ async def navigate_to_project(project_uuid, *, expected=_UNSET):
     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     await require_auth(page)
     verify_account(page.url, expected)
+
+
+def explicit_project(value, expected):
+    """Parse only an explicit ID or canonical account-scoped project URL."""
+    if expected is None:
+        raise ValueError("Existing project requires explicit FLOW_ACCOUNT_INDEX")
+    if not isinstance(value, str):
+        raise ValueError("Project must be a URL or ID")
+    if "://" not in value:
+        return identifier(value)
+    parsed = urlsplit(value)
+    verify_account(value, expected)
+    prefix = "/fx/tools/flow" if parsed.netloc == "labs.google" else ""
+    match = re.fullmatch(
+        rf"{prefix}/u/{re.escape(expected)}/project/([A-Za-z0-9_-]+)/?", parsed.path
+    )
+    if not match or parsed.query or parsed.fragment:
+        raise ValueError("Expected canonical account-scoped project URL")
+    return identifier(match.group(1))
+
+
+def verify_project(url, project, expected):
+    if expected is not None:
+        if explicit_project(url, expected) != project:
+            raise ValueError("Project identity changed")
+    else:
+        verify_account(url, expected)
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or parsed.netloc not in ("flow.google.com", "labs.google"):
+            raise ValueError("Project origin unconfirmed")
+        match = re.fullmatch(r"(?:/fx/tools/flow)?/project/([A-Za-z0-9_-]+)/?", parsed.path)
+        if not match or match.group(1) != project:
+            raise ValueError("Project identity changed")

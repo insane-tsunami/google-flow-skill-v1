@@ -64,3 +64,70 @@ Para lotes, el agente debe escribir el JSON y ejecutar `batch`; tú no tienes qu
 - `outputs/`: descargas locales, excluidas de Git.
 
 La automatización depende de la interfaz web de Flow y puede requerir mantenimiento cuando Google la cambie.
+
+### Existing projects and local Elements (issue #7)
+
+The following examples are illustrative. Replace the public placeholder ID,
+model label and local paths yourself; they are not real account identifiers or
+live acceptance evidence. These commands would consume credits when submitted;
+they have **not** been executed against Google for this change.
+
+```sh
+FLOW_ACCOUNT_INDEX=2 python flow.py image --project-id EXAMPLE_PROJECT_ID \
+  --model 'EXACT UI MODEL' --name illustration --prompt 'A landscape' \
+  --image ./reference-a.png --image ./reference-b.png --max-credits 1
+FLOW_ACCOUNT_INDEX=2 python flow.py video \
+  --project-url 'https://flow.google.com/u/2/project/EXAMPLE_PROJECT_ID' \
+  --model 'EXACT UI MODEL' --name motion --prompt 'Slow camera movement' \
+  --mode elements --image ./reference-a.png --image ./reference-b.png \
+  --duration 8s --max-credits 1
+```
+
+`--project-id` and `--project-url` select only an explicitly identified existing
+project under an explicit `FLOW_ACCOUNT_INDEX`. With neither option, the CLI
+keeps its isolated create/resume default. `--project-title 'Exact full title'`
+is optional exact verification of the unique visible navigation-header editable
+input value (observed current UI), or a unique visible exact heading on older
+layouts, never a title lookup. Missing, ambiguous or mismatched evidence blocks.
+
+Batch JSON uses top-level `project_id` **or** `project_url`, optional
+`project_title`, and the existing `project` as the **local output folder**.
+For example (illustrative, local reference files must exist):
+
+```json
+{
+  "project": "illustrative_elements",
+  "project_id": "EXAMPLE_PROJECT_ID",
+  "defaults": {"image_model": "EXACT UI MODEL", "video_model": "EXACT UI MODEL"},
+  "jobs": [
+    {"type": "image", "name": "still", "prompt": "A landscape", "images": ["./reference-a.png", "./reference-b.png"]},
+    {"type": "video", "name": "motion", "prompt": "Slow camera movement", "mode": "elements", "images": ["still", "./reference-b.png"]}
+  ]
+}
+```
+
+Run with `FLOW_ACCOUNT_INDEX=2 python flow.py batch illustrative.json --max-credits 1`.
+`images` is an ordered list; legacy JSON `image` remains supported separately.
+Video Elements require explicit `mode: "elements"`. Start/end frames use
+`mode: "frames"` (also inferred for legacy start/end jobs), and cannot combine
+with Elements or characters. Every job still produces exactly one file.
+
+**Saved characters remain safely gated.** `--character-id` / `--character`
+(JSON `character_id` / `character`) and video `--voice` are accepted as explicit
+requests and included in the job fingerprint, but currently block with
+`saved_element_identity_dom_unverified` **before browser startup**. The read-only observed saved-details DOM exposes an exact saved name and full
+voice preview, but not a stable saved-entry ID or an attached-character identity
+mapping; the second image variant is a placeholder, not verified Body evidence.
+Matching a label or a synthetic test attribute would not establish the complete
+saved identity / Portrait / Body / Voice relationship. This change
+therefore does not claim working saved-character/voice selection. Explicit image
+`voice` is invalid; images never select or validate associated audio. Truncated
+voice labels (`…` or `...`) are rejected. This is direct Elements handling;
+Agent mode is not a character selection fallback.
+
+Local reference bytes and explicit project/account/title participate in the
+fingerprint. Changed bytes or project requests block resume instead of repeating
+a submission. Existing manifests whose old fingerprint lacks these inputs may
+fail closed; do not delete them or reset uncertain jobs to force generation.
+See [maintenance limits](docs/MAINTENANCE.md) and the local test evidence in
+`scratch/issue7-final.md`.

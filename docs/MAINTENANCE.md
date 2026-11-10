@@ -276,3 +276,82 @@ exige `--max-attempts` explícito, dentro de 1–10. A transição é somente pa
 `download_recoveries` retém apenas código público e contador anterior sanitizados.
 Estado incerto, asset diferente, integridade e orçamento esgotado continuam
 bloqueados; a opção não substitui validação de recibo/arquivo nem corrige o DOM.
+
+## Issue #7: explicit project and Elements boundaries
+
+Local-only implementation; no Google session, account, profile or paid generation
+was used for this change. Examples in README are generic illustrative inputs.
+The selected branch is `fix/flow-elements-cli`; no commit/push/PR is part of this work.
+
+- `image`, `video`, `batch`: `--project-id` or `--project-url`, requiring explicit
+  `FLOW_ACCOUNT_INDEX`. Canonical URLs accept only the account-scoped Flow/Labs
+  origins and project paths, without query/fragment. Title is a separate exact
+  project navigation-header editable-input value or unique visible heading
+  assertion (`--project-title`), never lookup. Unknown/missing or
+  ambiguous title blocks. Account/project are checked after navigation, on cached
+  reuse, after uploads and immediately before submit. A persisted target conflict
+  blocks before opening a browser. Absence of explicit target retains isolated
+  creation. An existing project must not be edited concurrently by a human.
+- Repeat `--image` for local references on image/video; JSON uses ordered `images`
+  (exclusive with legacy `image`). References can name earlier batch jobs.
+  Video references require `mode: elements`; start/end frames cannot combine with
+  Elements, characters or explicit Elements mode. Incompatibility fails preflight.
+- Local file SHA-256 values, ordered references, project/account/title, requested
+  character, voice and mode enter the durable job fingerprint. Dependency output
+  bytes are captured before configuration and checked again before submit; their
+  producer job is already included in the manifest fingerprint. Final attached
+  IDs must match exactly, and uploads must preserve all previous attached IDs.
+  Changed/missing input bytes block; no automatic reset or repeated submit.
+- Privacy remains unchanged: report stores only the fingerprint, sanitized state
+  and effective settings; no prompt, reference file contents, title or URL is
+  added to persisted reports. `project.json` stores only project ID/account.
+  Reference hashes are in-memory inputs to the fingerprint. Legacy manifests with
+  different fingerprints block; do not migrate by deleting recovery evidence.
+
+### Exact saved-character limitation
+
+The labels Add elements, Upload media (including `role=option`), Include in prompt,
+Portrait/Body/Voice and their locale labels are centralized in `selectors.py`.
+A label is not proof of the relationship between a saved character ID, an attached
+portrait/body identity and a complete associated or selected voice identity.
+Read-only observation on 2026-11-10 confirmed `flow-add-menu-asset-item`
+inside a `button[role=option]` with `.asset-title`/`.type-subtitle`, and a
+`flow-character-preview-pane` with `.character-hero-image`, two thumbnail
+buttons, `.character-voice-name`, `.character-voice-description` and an audio
+preview. The full voice name/description were readable (not truncated), but
+there was no stable saved-character ID on the option. The second character
+thumbnail was a placeholder, not proof of a body image. A preview image ID is
+not the saved-character ID. No attachment was added and no voice was changed;
+the observed empty editor provides no attached-character/voice identity proof.
+Private media URLs, IDs and voice descriptions are intentionally not committed.
+Consequently requests for a saved character fail before browser access with
+`saved_element_identity_dom_unverified`; no guessed row/ID attributes or first-name
+matches are enabled. `--voice` requires video plus a character and a full exact
+label; truncated/unverified voices never reach submit. Explicit image voice is
+rejected, and image handling does not choose any associated voice. This does not
+claim saved-character selection is implemented or live-verified.
+
+To remove this gate, a future authorized observation must document how the real
+saved entry exposes stable ID or unique exact name, how its Portrait and Body
+relate to attached IDs, and how full associated/selected Voice is exposed after
+attachment. Add real ephemeral offline chooser/selection regressions from that
+sanitized contract, including replacements and ambiguity, before enabling it.
+Never interpret a synthetic fixture as evidence of actual service support.
+The optional exact-title heading and Elements radio/tab/button contracts also
+fail closed if not exposed by the current UI. Locale strings alone promise no
+account/model availability. This change adds no Agent-mode Elements support.
+
+### Local validation evidence
+
+`scratch/issue7-red.txt` records the initial five failing tests (one passed).
+`scratch/issue7-final.md` records exact commands, outcomes and environment limits.
+The first Codex sandbox Chromium launch failed with `setsockopt: Operation not
+permitted`; it was not counted as passing validation. Hermes then ran the full
+suite outside that sandbox with ephemeral offline Chromium: **242 passed** on
+Python **3.10.22** (209.88 s) and **242 passed** on Python **3.14.7** (217.88 s).
+Ruff lint/format, compileall and real image/video/batch `--help` passed. A first
+independent review returned FAIL (output-path dependency alias and missing mode
+recovery allowlist); both have dedicated regressions and fixes. This is offline
+functional/safety evidence, not paid Google service acceptance. Read-only DOM
+inspection used the already-running browser only, without adding attachments,
+changing voice, filling prompts, invoking generation or modifying profile data.
