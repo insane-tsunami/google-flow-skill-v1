@@ -175,6 +175,7 @@ async def execute(args):
                 "direct_mode",
                 "max_credits",
                 "retry_configuration",
+                "additional_configuration_attempts",
                 "retry_download",
                 "project_id",
                 "project_url",
@@ -203,6 +204,7 @@ async def execute(args):
         adapter,
         max_attempts=args.max_attempts,
         retry_configuration=args.retry_configuration,
+        additional_configuration_attempts=args.additional_configuration_attempts,
         retry_download=args.retry_download,
     )
     try:
@@ -267,6 +269,13 @@ def build_parser():
     p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--max-attempts", type=int, default=3)
     for command in ("image", "video", "batch"):
+        sub.choices[command].add_argument(
+            "--additional-configuration-attempts",
+            type=int,
+            choices=(1, 2),
+            default=0,
+            help="One durable configuration-only extension for one exhausted pre-submit job; requires --retry-configuration --max-attempts 10",
+        )
         target = sub.choices[command].add_mutually_exclusive_group()
         target.add_argument(
             "--project-id", help="Existing project ID; requires explicit FLOW_ACCOUNT_INDEX"

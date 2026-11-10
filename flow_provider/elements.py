@@ -95,6 +95,9 @@ async def picker_character(page, name, kind, voice=None):
     """Read only the uniquely active saved-character detail, never a global name."""
     from .safe_ui import unique
 
+    # The add click may finish before Angular renders its popover. Readiness
+    # is bounded; this does not relax the unique-row/voice/attachment proof.
+    await page.locator("flow-add-menu-popover-content:visible").wait_for(timeout=3000)
     picker = await unique(page.locator("flow-add-menu-popover-content:visible"))
     rows = (
         picker.get_by_role("option")

@@ -128,6 +128,15 @@ submit automaticamente, mesmo que isso tenha ocorrido antes do clique real.
   configuração validada, o submit continua sujeito às aprovações normais.
 - `pending` com `dependency_unavailable`: o dependente não executou.
 
+Para um único job que já esgotou exatamente dez configurações e nunca teve
+submit, uma autorização humana específica pode usar
+`--retry-configuration --max-attempts 10 --additional-configuration-attempts 1|2`.
+É uma única extensão durável, não renovável, somente de configuração: preserva
+fingerprint, contadores e histórico, não aumenta downloads nem tentativas pagas.
+Exige o mesmo número autorizado em cada retomada; omitir a opção não concede
+a extensão. Estado incerto ou pós-submit nunca é reconfigurado. Detalhes e
+resultado do smoke em `OMNI-CONTRACT-20261110.md`.
+
 Tentativas de download têm limite persistente 1–10 (`--max-attempts`), backoff
 exponencial limitado a 10 s, e são contadas **antes** de executar. A espera pelo
 asset conhecido e controle de download é temporária/retryable, não falha terminal

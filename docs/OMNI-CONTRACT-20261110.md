@@ -57,7 +57,7 @@ full Python 3.14 suite passed before the final busy-readiness delta. Final suite
 and live smoke outcomes are recorded separately rather than inferred from these
 fixtures or reviews.
 
-## Live boundary and configuration budget
+## Initial live boundary and configuration budget
 
 The authorized existing smoke retained its original fingerprint and all recovery
 history. Its ten configuration attempts failed before submit intent; the report
@@ -80,3 +80,53 @@ Existing smoke manifests and recovery counters are preserved. Configuration
 retries are explicit, bounded and permitted only before submit intent. No merge,
 profile copying, credential changes, policy approval bypass, or WhatsApp
 publication is part of this change.
+
+## Explicit bounded extension and final live stop
+
+The user subsequently authorized **at most two additional configurations** of
+the same smoke, not another payment or a reset. The new operational option
+`--additional-configuration-attempts 2` requires `--retry-configuration`,
+`--max-attempts 10`, one exact job, and an allowlisted failed configuration at
+counter 10 without submit/asset/result/output. A durable per-row
+`configuration_extension: {base: 10, additional: 2}` records this limited grant.
+It cannot be renewed or changed by repeating the flag. The configuration ceiling
+is separate from the unchanged download budget, counters/history/fingerprint
+are preserved, and submit remains at most one durable intent. Matching-marker
+replay validates counters and post-submit consistency. A general guard also
+prevents an inconsistent submit-without-asset checkpoint from spending twice.
+
+Extension tests first failed before implementation. Independent review initially
+found malformed matching-marker replay could bypass eligibility; six additional
+regressions failed before strict counter/state validation and the submit guard,
+then passed. The bounded re-review returned PASS. The first extended live
+configuration (counter 11) failed immediately reading the character picker after
+the add click. A real offline Chromium delayed-popover regression reproduced
+zero actionable targets; a strict finite three-second visible wait fixed that
+readiness race without relaxing uniqueness/voice/attachment gates. Its separate
+bounded review returned PASS.
+
+The second and final extended live configuration (counter **12**) succeeded and
+read back Omni 1.2 Flash, 9:16, count 1, one image reference, 8s and visible cost
+**24 credits**, with the saved character attached. The Runner durably reserved
+`submit: 1` and `uncertain` before entering the submit adapter. Saved character
+revalidation then raised **`Saved character or associated voice changed`** at
+`elements.verify_character`'s complete-proof comparison. This happened before
+the generation click in `UIAdapter.submit`. The sanitized diagnostic does not
+establish which proof field differed; do not claim the voice specifically changed.
+
+**Final stop:** state `uncertain`, error `submit_or_identity_unconfirmed`,
+configure 12, submit-intent 1, no download counter, asset, result or MP4. The
+generation click was not reached; no paid retry was attempted. A credit-balance
+ledger was not queried, so the observed 24-credit price is not a measured debit.
+The original fingerprint and all eleven recovery-history entries remain.
+No further live configuration, reconciliation, reset or generation is permitted
+by this exhausted extension. Browser shutdown completed and no dedicated-profile
+process remained. This is an identity/association gate, not a login failure or
+policy refusal. Audio, duration of a result, fidelity and MP4 validation remain
+unproven because no video was generated.
+
+The final exact-command terminal replay returned exit 1 without starting a
+browser and left the manifest bytes and counters unchanged. Final isolated
+offline Chromium suites passed **351 tests** each on Python 3.14.7 and 3.10.22;
+Ruff lint/format, compileall, CLI help and diff checks passed. These are offline
+safety evidence, not live video acceptance.

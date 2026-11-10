@@ -21,6 +21,15 @@ async def test_character_roundtrip(page):
         await verify_character(page, proof)
 
 
+async def test_character_picker_opens_asynchronously(page):
+    await character_dom(page)
+    await page.get_by_role("button", name="Adicionar elementos à caixa de comando").evaluate(
+        "e=>e.setAttribute('onclick', \"setTimeout(()=>document.querySelector('flow-add-menu-popover-content').hidden=false, 250)\")"
+    )
+    proof = await attach_character(page, dict(character="Unique", type="video", voice="Full voice"))
+    await verify_character(page, proof)
+
+
 async def test_character_id_is_not_preview_id(page):
     with pytest.raises(ValueError, match="not exposed"):
         await attach_character(page, dict(character_id="preview-image-id"))
