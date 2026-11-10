@@ -308,38 +308,35 @@ The selected branch is `fix/flow-elements-cli`; no commit/push/PR is part of thi
   Reference hashes are in-memory inputs to the fingerprint. Legacy manifests with
   different fingerprints block; do not migrate by deleting recovery evidence.
 
-### Exact saved-character limitation
+### Observed saved-character contract
 
-The labels Add elements, Upload media (including `role=option`), Include in prompt,
-Portrait/Body/Voice and their locale labels are centralized in `selectors.py`.
-A label is not proof of the relationship between a saved character ID, an attached
-portrait/body identity and a complete associated or selected voice identity.
-Read-only observation on 2026-11-10 confirmed `flow-add-menu-asset-item`
-inside a `button[role=option]` with `.asset-title`/`.type-subtitle`, and a
-`flow-character-preview-pane` with `.character-hero-image`, two thumbnail
-buttons, `.character-voice-name`, `.character-voice-description` and an audio
-preview. The full voice name/description were readable (not truncated), but
-there was no stable saved-character ID on the option. The second character
-thumbnail was a placeholder, not proof of a body image. A preview image ID is
-not the saved-character ID. No attachment was added and no voice was changed;
-the observed empty editor provides no attached-character/voice identity proof.
-Private media URLs, IDs and voice descriptions are intentionally not committed.
-Consequently requests for a saved character fail before browser access with
-`saved_element_identity_dom_unverified`; no guessed row/ID attributes or first-name
-matches are enabled. `--voice` requires video plus a character and a full exact
-label; truncated/unverified voices never reach submit. Explicit image voice is
-rejected, and image handling does not choose any associated voice. This does not
-claim saved-character selection is implemented or live-verified.
+Authorized attachment-only observation on 2026-11-10 supersedes the initial
+read-only limitation. Exact `.asset-title` plus character `.type-subtitle`, a
+unique active picker row and its scoped `flow-character-preview-pane` establish
+the saved entry. Include in prompt creates a `flow-character-ingredient-chip`
+whose image equals the selected row thumbnail. Generic `Elemento` and hover
+counts alone are not identity. The saved ID is not exposed; `--character-id`
+fails before browser access, while exact-name selection is implemented.
 
-To remove this gate, a future authorized observation must document how the real
-saved entry exposes stable ID or unique exact name, how its Portrait and Body
-relate to attached IDs, and how full associated/selected Voice is exposed after
-attachment. Add real ephemeral offline chooser/selection regressions from that
-sanitized contract, including replacements and ambiguity, before enabling it.
-Never interpret a synthetic fixture as evidence of actual service support.
-The optional exact-title heading and Elements radio/tab/button contracts also
-fail closed if not exposed by the current UI. Locale strings alone promise no
-account/model availability. This change adds no Agent-mode Elements support.
+Video validates full associated voice name, description and scoped audio sample;
+explicit voice is an assertion, not a replacement selector. Image skips voice.
+Pre-submit revalidation removes only the adapter-owned proven chip, rereads the
+same unique saved entry and reattaches; already attached entries are absent from
+the picker. Clicking an already active option includes it immediately, so the
+adapter reads that detail without clicking it. Ambiguous/incomplete search,
+missing variant evidence, truncation or association drift fails closed. Private
+URLs/IDs are compared only in memory and not persisted. Existing unproved human
+attachments are preserved and rejected; adapter-owned retained chips are checked
+and removed on the next configuration/retry.
+
+The second variant was previously misidentified as a placeholder. A fresh visual
+inspection found an actual full-body front/side/back reference; both images were
+loaded. This is an observation of that entry, not a general Body classifier or
+a promise of generation fidelity. No separately named portrait/body selector is
+offered. `docs/CHARACTER-CONTRACT.md` records acceptance boundaries. No Google
+generation or approval was clicked, no prompt was filled and no credits were
+spent. Direct Elements/model/cost gates remain required; Agent generation is not
+implemented by this change.
 
 ### Local validation evidence
 

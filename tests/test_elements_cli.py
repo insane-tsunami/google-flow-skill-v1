@@ -100,7 +100,9 @@ async def test_saved_character_stops_before_browser(tmp_path, monkeypatch, kind)
     monkeypatch.setattr(safe_ui.browser, "get_page", launch)
     adapter = safe_ui.UIAdapter(tmp_path / "project.json", max_credits=1)
     job = dict(type=kind, mode="elements", character_id="saved")
-    with pytest.raises(safe_ui.ConfigurationError, match="saved_element_identity_dom_unverified"):
+    with pytest.raises(
+        safe_ui.ConfigurationError, match="saved_character_id_not_exposed_use_exact_name"
+    ):
         await adapter.configure(job)
     launch.assert_not_called()
     assert not (tmp_path / "project.json").exists()

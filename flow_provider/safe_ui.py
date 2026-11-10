@@ -13,6 +13,8 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import browser
 from .elements import (
+    attach_character,
+    verify_character,
     require_observed_character_contract,
     seal_references,
     validate_inputs,
@@ -158,10 +160,13 @@ async def choose(panel, text):
         raise ValueError("Selection did not persist")
 
 
-async def references(page):
+async def references(page, character=None):
+    await verify_character(page, character)
     values = []
     for element in await page.locator(ATTACHED).all():
         if await element.is_visible():
+            if await element.evaluate("e=>!!e.closest('flow-character-ingredient-chip')"):
+                continue
             value = await element.get_attribute("data-media-id") or await element.get_attribute(
                 "data-mention-id"
             )
@@ -173,7 +178,7 @@ async def references(page):
     return values
 
 
-async def verify_configuration(page, request, refs):
+async def verify_configuration(page, request, refs, character=None):
     panel = await panel_for(page)
     actual = clean(await (await control(panel, "model")).inner_text())
     evidence = {"requested": request, "effective": await configuration_snapshot(panel)}
@@ -201,7 +206,7 @@ async def verify_configuration(page, request, refs):
             ]
         ):
             raise ConfigurationError("reference_mode_unconfirmed", {})
-    if sorted(await references(page)) != sorted(refs):
+    if sorted(await references(page, character)) != sorted(refs):
         raise ConfigurationError("reference_mismatch", evidence)
     duration = request.get("duration")
     if duration:
@@ -378,8 +383,6 @@ class UIAdapter:
         validate_inputs(job)
         verify_reference_bytes(job)
         if job.get("character") or job.get("character_id"):
-            # No observed saved-details identity contract: stop before even
-            # creating a project or opening the dedicated browser profile.
             require_observed_character_contract(job)
         if self.page is not None:
             from .project import verify_account
@@ -397,6 +400,17 @@ class UIAdapter:
         self.require_credit_approval()
         await self.ensure_project()
         await require_auth(self.page)
+        previous = getattr(self, "character", None)
+        # Preserve human attachments, but permit retries/batch continuation with
+        # exactly the adapter-owned references from its previous configuration.
+        current = await references(self.page, previous)
+        if sorted(current) != sorted(getattr(self, "refs", [])):
+            raise ValueError("Unexpected preexisting references")
+        if previous is not None:
+            # references() has just proved this exact adapter-owned chip.
+            chip = await unique(self.page.locator("flow-character-ingredient-chip:visible button"))
+            await chip.click()
+        self.character = None
         from .project import verify_account
 
         verify_account(self.page.url, self.account_index)
@@ -453,9 +467,11 @@ class UIAdapter:
                 self.refs.append(await upload_reference(self.page, job[key], slot))
         for path in job.get("images", []):
             self.refs.append(await upload_reference(self.page, path))
+        if job.get("character"):
+            self.character = await attach_character(self.page, job)
         verify_reference_bytes(self.reference_job)
         await self.verify_project_identity()
-        effective = await verify_configuration(self.page, self.expected, self.refs)
+        effective = await verify_configuration(self.page, self.expected, self.refs, self.character)
         self.cost = await self.verify_cost()
         return effective | {"credits": self.cost}
 
@@ -468,8 +484,11 @@ class UIAdapter:
         if self.reference_job is not None:
             verify_reference_bytes(self.reference_job)
         await self.ensure_direct_mode()
+        character = getattr(self, "character", None)
+        if character is not None:
+            await verify_character(self.page, character, saved=True)
         # Re-read after upload and prompt editing, immediately before click.
-        await verify_configuration(self.page, self.expected, self.refs)
+        await verify_configuration(self.page, self.expected, self.refs, character)
         if await self.verify_cost() != self.cost:
             raise ConfigurationError("generation_cost_changed", {})
         await (await control(self.page, "settings")).click()
@@ -478,7 +497,7 @@ class UIAdapter:
         await self.verify_project_identity()
         if self.reference_job is not None:
             verify_reference_bytes(self.reference_job)
-        if sorted(await references(self.page)) != sorted(self.refs):
+        if sorted(await references(self.page, character)) != sorted(self.refs):
             raise ConfigurationError("reference_mismatch", {})
         await (await control(self.page, "submit")).click()
         return await new_asset(self.page, before)

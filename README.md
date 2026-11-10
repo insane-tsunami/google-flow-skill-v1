@@ -112,18 +112,26 @@ Video Elements require explicit `mode: "elements"`. Start/end frames use
 `mode: "frames"` (also inferred for legacy start/end jobs), and cannot combine
 with Elements or characters. Every job still produces exactly one file.
 
-**Saved characters remain safely gated.** `--character-id` / `--character`
-(JSON `character_id` / `character`) and video `--voice` are accepted as explicit
-requests and included in the job fingerprint, but currently block with
-`saved_element_identity_dom_unverified` **before browser startup**. The read-only observed saved-details DOM exposes an exact saved name and full
-voice preview, but not a stable saved-entry ID or an attached-character identity
-mapping; the second image variant is a placeholder, not verified Body evidence.
-Matching a label or a synthetic test attribute would not establish the complete
-saved identity / Portrait / Body / Voice relationship. This change
-therefore does not claim working saved-character/voice selection. Explicit image
-`voice` is invalid; images never select or validate associated audio. Truncated
-voice labels (`…` or `...`) are rejected. This is direct Elements handling;
-Agent mode is not a character selection fallback.
+**Saved characters by exact unique name.** Use `--character "Full saved name"`
+(JSON `character`) for image or video. Video requires `--mode elements` and
+validates the saved associated voice; optional `--voice "Full voice name"` asserts
+that association, it does not replace it with an unrelated voice. Image jobs
+ignore associated audio; explicit image voice is invalid. Full DOM labels are
+required; ellipses, ambiguity, missing detail/voice/variant evidence and changed
+associations block before submit. `--character-id` remains unsupported because
+the observed UI does not expose a saved-character ID; preview image IDs are not
+character IDs.
+
+Attachment-only live observation verified exact picker row → active character
+detail → Include in prompt → character chip with the same row thumbnail. The
+chip's generic `Elemento` label is never accepted as identity. Before payment,
+the adapter removes only its proven owned chip, rereads the saved details and
+reattaches, because Flow hides attached characters from the picker. All other
+references, project/account, settings and cost gates still apply. Concurrent
+human editing of the same composer is unsupported. No separate portrait/body
+variant selector or guarantee of generated voice/body fidelity is offered.
+See `docs/CHARACTER-CONTRACT.md` for evidence and limits. This is direct Elements
+handling, not Agent generation support; no live generation was tested.
 
 Local reference bytes and explicit project/account/title participate in the
 fingerprint. Changed bytes or project requests block resume instead of repeating

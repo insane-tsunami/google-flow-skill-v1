@@ -247,13 +247,15 @@ def build_parser():
         )
         p.add_argument(
             "--character",
-            help="Exact unique saved Element name; currently gated on verified identity DOM",
+            help="Exact unique saved character name; verifies picker/detail/attached association",
         )
         p.add_argument(
             "--character-id",
-            help="Stable saved Element ID; currently gated on verified identity DOM",
+            help="Unavailable in observed UI (no saved ID exposed); use --character",
         )
-        p.add_argument("--voice", help="Exact complete verified character voice; video only")
+        p.add_argument(
+            "--voice", help="Assert full saved associated voice name; video only, no replacement"
+        )
         if kind == "video":
             p.add_argument("--start")
             p.add_argument("--end")
