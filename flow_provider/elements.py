@@ -131,9 +131,28 @@ async def picker_character(page, name, kind, voice=None):
     source = await thumbnail.get_attribute("src")
     if not source or not source.startswith("https://flow.google.com/asb/"):
         raise ValueError("Character thumbnail missing")
-    variants = await preview.locator(".character-thumbnail-image").evaluate_all(
-        "es=>es.map(e=>({src:e.getAttribute('src'),loaded:e.complete&&e.naturalWidth>0}))"
-    )
+    # The pane becomes visible before all reference nodes are rendered. Seal
+    # only a nonempty snapshot that stays unchanged through a bounded quiet
+    # window; never discard a variant or weaken the later exact comparison.
+    import time
+
+    deadline = time.monotonic() + 3
+    stable_since = time.monotonic()
+    previous = None
+    while True:
+        variants = await preview.locator(".character-thumbnail-image").evaluate_all(
+            "es=>es.map(e=>({src:e.getAttribute('src'),loaded:e.complete&&e.naturalWidth>0}))"
+        )
+        sources = [v["src"] for v in variants]
+        now = time.monotonic()
+        if sources != previous:
+            previous = sources
+            stable_since = now
+        if sources and all(sources) and now - stable_since >= 0.3:
+            break
+        if now >= deadline:
+            raise ValueError("Character variants did not stabilize")
+        await page.wait_for_timeout(100)
     if not variants or any(not v["src"] for v in variants):
         raise ValueError("Character variants missing or placeholder")
     # URLs are compared in memory only, never persisted or treated as saved IDs.
@@ -197,6 +216,9 @@ async def verify_character(page, proof, *, saved=False):
         # chip whose in-memory attachment proof was just checked, then reread
         # the saved association and reattach it without touching prompt/media.
         await (await unique(chip.locator("button"))).click()
+        # Angular can finish the click before the owned chip leaves the DOM.
+        # Wait only for that removal; attach_character still rejects other chips.
+        await chip.wait_for(state="hidden", timeout=3000)
         current = await attach_character(
             page,
             {
@@ -206,4 +228,20 @@ async def verify_character(page, proof, *, saved=False):
             },
         )
         if current != proof:
-            raise ValueError("Saved character or associated voice changed")
+            changed = [
+                key
+                for key in (
+                    "name",
+                    "kind",
+                    "thumbnail",
+                    "variants",
+                    "voice",
+                    "description",
+                    "sample",
+                )
+                if current.get(key) != proof.get(key)
+            ]
+            # Field names only: never expose private URLs or voice descriptions.
+            raise ValueError(
+                "Saved character or associated voice changed (fields: " + ", ".join(changed) + ")"
+            )

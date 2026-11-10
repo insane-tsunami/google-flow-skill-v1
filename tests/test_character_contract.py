@@ -10,6 +10,45 @@ async def character_dom(page):
     <flow-add-menu-popover-content hidden><button role="option" class="asset-item-active"><span class="asset-title">Unique</span><span class="type-subtitle">Personagem</span><img src="https://flow.google.com/asb/example"></button><flow-character-preview-pane><img class="character-thumbnail-image" src="https://flow-content.google/image/example"><div class="character-voice-card"><span class="character-voice-name">Full voice</span><span class="character-voice-description">Full description</span></div><audio src="https://www.gstatic.com/aitestkitchen/voices/samples/example.wav"></audio></flow-character-preview-pane><button onclick="document.querySelector('flow-character-ingredient-chip').hidden=false;this.parentElement.hidden=true">Incluir no comando</button></flow-add-menu-popover-content>""")
 
 
+async def test_saved_revalidation_waits_for_complete_variant_render(page):
+    await character_dom(page)
+    await page.locator(".character-voice-name").evaluate(
+        """e=>{const first=document.querySelector('.character-thumbnail-image');
+          const original=first.getAttribute.bind(first);let scheduled=false;
+          first.getAttribute=function(name){if(name==='src'&&!scheduled){scheduled=true;
+            setTimeout(()=>{const second=first.cloneNode(true);
+              second.src='https://flow-content.google/image/second';first.after(second)},150)}
+            return original(name)}
+        }"""
+    )
+    proof = await attach_character(page, dict(character="Unique", type="video"))
+    assert len(proof["variants"]) == 2
+
+
+async def test_variant_render_never_stabilizes_blocks_attachment(page):
+    await character_dom(page)
+    await page.evaluate(
+        """window.variantCounter=0; window.variantTimer=setInterval(()=>{
+          document.querySelector('.character-thumbnail-image').src=
+            'https://flow-content.google/image/'+(++window.variantCounter)
+        },50)"""
+    )
+    with pytest.raises(ValueError, match="did not stabilize"):
+        await attach_character(page, dict(character="Unique", type="video"))
+    assert await page.locator("flow-character-ingredient-chip:visible").count() == 0
+    await page.evaluate("clearInterval(window.variantTimer)")
+
+
+async def test_saved_revalidation_waits_for_owned_chip_removal(page):
+    await character_dom(page)
+    proof = await attach_character(page, dict(character="Unique", type="video"))
+    await page.locator("flow-character-ingredient-chip button").evaluate(
+        "e=>e.setAttribute('onclick', 'setTimeout(()=>this.parentElement.hidden=true, 250)')"
+    )
+    await verify_character(page, proof, saved=True)
+    assert await page.locator("flow-character-ingredient-chip:visible").count() == 1
+
+
 async def test_character_roundtrip(page):
     await character_dom(page)
     proof = await attach_character(page, dict(character="Unique", type="video", voice="Full voice"))
@@ -93,8 +132,13 @@ async def test_presubmit_saved_revalidation(page, mutation):
             "e=>e.src='https://flow-content.google/image/other'"
         )
     if mutation:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError) as error:
             await verify_character(page, proof, saved=True)
+        expected_field = "description" if mutation == "voice" else "variants"
+        assert str(error.value) == (
+            "Saved character or associated voice changed (fields: " + expected_field + ")"
+        )
+        assert not any(value in str(error.value) for value in ("https://", "Changed description"))
     else:
         await verify_character(page, proof, saved=True)
 
