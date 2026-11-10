@@ -160,19 +160,215 @@ async def choose(panel, text):
         raise ValueError("Selection did not persist")
 
 
+def duration_seconds(text):
+    match = re.fullmatch(r"(\d+)\s*(?:s|seconds?|segundos?)", clean(text), re.I)
+    return int(match.group(1)) if match else None
+
+
+async def duration_slider(panel):
+    sliders = [
+        item
+        for item in await panel.locator('input[type="range"], [role="slider"]').all()
+        if await item.is_visible() and await item.is_enabled()
+    ]
+    candidates = []
+    for slider in sliders:
+        # A duration label must belong to this component, never the whole panel.
+        component = slider.locator(
+            'xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " duration-slider-section ") '
+            'or @aria-label="Duration" or @aria-label="Duração" '
+            'or @aria-label="Duración" or *[normalize-space(text())="Duration" '
+            'or normalize-space(text())="Duração" or normalize-space(text())="Duración"]][1]'
+        )
+        if await component.count() and await component.evaluate(
+            "(element, panel) => element !== panel && panel.contains(element)",
+            await panel.element_handle(),
+        ):
+            candidates.append((slider, component))
+    if not candidates:
+        if sliders:
+            raise ValueError("Duration slider scope unknown")
+        return None
+    if len(candidates) != 1:
+        raise ValueError("Duration slider ambiguous")
+    slider, component = candidates[0]
+    native_range = await slider.evaluate('e => e.matches("input[type=range]")')
+    bounds = []
+    for native, aria in (("min", "aria-valuemin"), ("max", "aria-valuemax")):
+        raw = await slider.get_attribute(native if native_range else aria)
+        if raw is None and not native_range:
+            raw = await slider.get_attribute(native)
+        try:
+            value = float(raw)
+            aria_raw = await slider.get_attribute(aria) if native_range else None
+            if aria_raw is not None and float(aria_raw) != value:
+                raise ValueError("Duration native and ARIA bounds conflict")
+        except (TypeError, ValueError):
+            raise ValueError("Duration slider bounds unknown or conflicting") from None
+        if not math.isfinite(value):
+            raise ValueError("Duration slider bounds invalid")
+        bounds.append(value)
+    step = await slider.get_attribute("step") or "1"
+    try:
+        step = float(step)
+    except ValueError:
+        raise ValueError("Duration slider step unknown") from None
+    if not math.isfinite(step) or step <= 0 or bounds[1] < bounds[0]:
+        raise ValueError("Duration slider bounds invalid")
+    intervals = (bounds[1] - bounds[0]) / step
+    if not math.isfinite(intervals) or not intervals.is_integer() or intervals > 31:
+        raise ValueError("Duration slider exceeds bounded positions")
+    return slider, component, bounds, int(intervals) + 1
+
+
+async def read_duration_slider(state):
+    slider, component, bounds, _ = state
+    native_range = await slider.evaluate('e => e.matches("input[type=range]")')
+    aria_raw = await slider.get_attribute("aria-valuenow")
+    raw = await slider.input_value() if native_range else aria_raw
+    if raw is None:
+        raise ValueError("Duration slider readback unknown")
+    try:
+        position = float(raw)
+        if native_range and aria_raw is not None and float(aria_raw) != position:
+            raise ValueError("Duration native and ARIA position conflict")
+    except (TypeError, ValueError):
+        raise ValueError("Duration slider readback unknown or conflicting") from None
+    if not math.isfinite(position) or not bounds[0] <= position <= bounds[1]:
+        raise ValueError("Duration slider readback invalid")
+    semantics = []
+    # Rendered text is local to the duration component. Bare numbers in
+    # valuetext are indices, not seconds, and cannot establish duration.
+    text = clean(await component.inner_text())
+    text = re.sub(r"^(?:Duration|Duração|Duración)\s*:?\s*", "", text, flags=re.I)
+    if text:
+        semantic = duration_seconds(text)
+        if semantic is None:
+            raise ValueError("Duration label unknown or ambiguous")
+        semantics.append(semantic)
+    for attribute in ("aria-valuetext", "aria-label"):
+        value = await slider.get_attribute(attribute) or ""
+        value = re.sub(r"^(?:Duration|Duração|Duración)\s*:?\s*", "", value, flags=re.I)
+        semantic = duration_seconds(value)
+        if semantic is not None:
+            semantics.append(semantic)
+        elif value and not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value):
+            raise ValueError("Duration accessible label unknown")
+    if not semantics or len(set(semantics)) != 1:
+        raise ValueError("Duration label unknown or ambiguous")
+    return position, semantics[0]
+
+
+async def verify_duration(panel, duration):
+    wanted = duration_seconds(duration)
+    if wanted is None:
+        raise ValueError("Invalid duration")
+    state = await duration_slider(panel)
+    if state is not None:
+        if (await read_duration_slider(state))[1] != wanted:
+            raise ValueError("Duration not confirmed")
+    elif not await selected(panel, f"{wanted} s"):
+        raise ValueError("Duration not confirmed")
+
+
+async def configure_duration(panel, duration):
+    wanted = duration_seconds(duration)
+    if wanted is None:
+        raise ValueError("Invalid duration")
+    state = await duration_slider(panel)
+    if state is None:
+        await choose(panel, f"{wanted} s")
+        return
+    current = await read_duration_slider(state)
+    if current[1] == wanted:
+        return
+    slider, _, bounds, positions = state
+    await slider.press("Home")
+    previous = None
+    seen = set()
+    for index in range(positions):
+        position, semantic = await read_duration_slider(state)
+        if (
+            (index == 0 and position != bounds[0])
+            or (previous is not None and (position <= previous[0] or semantic == previous[1]))
+            or semantic in seen
+        ):
+            raise ValueError("Duration keyboard readback failed")
+        seen.add(semantic)
+        if semantic == wanted:
+            await verify_duration(panel, duration)
+            return
+        previous = position, semantic
+        if index + 1 < positions:
+            await slider.press("ArrowRight")
+    raise ValueError("Duration unavailable")
+
+
+def _attached_image_id(src):
+    # Only the observed service URL is evidence. Never include signed URLs in
+    # diagnostics or durable state; return just the path UUID.
+    match = re.fullmatch(
+        r"https://flow-content\.google/image/"
+        r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+        r"(?:\?[^\s#]*)?",
+        src or "",
+    )
+    if match is None:
+        raise ValueError("Attached reference source unverified")
+    return identifier(match.group(1))
+
+
+class ReferenceNotReady(ValueError):
+    """Only the observed busy image chip may wait during an owned upload."""
+
+
 async def references(page, character=None):
     await verify_character(page, character)
     values = []
-    for element in await page.locator(ATTACHED).all():
-        if await element.is_visible():
-            if await element.evaluate("e=>!!e.closest('flow-character-ingredient-chip')"):
-                continue
-            value = await element.get_attribute("data-media-id") or await element.get_attribute(
-                "data-mention-id"
+    attached = (
+        ATTACHED + ", :is(.ingredient-bar-container, flow-prompt-box) flow-image-ingredient-chip"
+    )
+    for element in await page.locator(attached).all():
+        if not await element.is_visible():
+            continue
+        if await element.evaluate("e=>e.localName === 'flow-image-ingredient-chip'"):
+            chip = element
+            busy = chip.locator(
+                ':scope > button.chip-container[aria-label="Elemento"][aria-busy="true"]'
             )
-            if not value:
+            if await busy.count() == 1:
+                raise ReferenceNotReady("Attached image upload not ready")
+            placeholder = chip.locator(
+                ':scope > button.chip-container[aria-label="Elemento"][aria-busy="false"]'
+                " > div.chip-image-wrapper > div.chip-placeholder"
+            )
+            if await chip.locator("img").count() == 0 and await placeholder.count() == 1:
+                raise ReferenceNotReady("Attached image placeholder not ready")
+            image = chip.locator(
+                ':scope > button.chip-container[aria-label="Elemento"][aria-busy="false"]'
+                ' > div.chip-image-wrapper > img.chip-image[alt="Imagem do elemento"]'
+            )
+            if await chip.locator("img").count() != 1 or await image.count() != 1:
+                raise ValueError("Ambiguous or unready attached image")
+            if not await image.is_visible():
                 raise ValueError("Attached reference identity unverified")
-            values.append(identifier(value))
+            value = _attached_image_id(await image.get_attribute("src"))
+            for attr in ("data-media-id", "data-mention-id"):
+                explicit = await image.get_attribute(attr)
+                if explicit is not None and explicit != value:
+                    raise ValueError("Conflicting attached reference identity")
+            values.append(value)
+            continue
+        if await element.evaluate(
+            "e=>!!e.closest('flow-character-ingredient-chip, flow-image-ingredient-chip')"
+        ):
+            continue
+        value = await element.get_attribute("data-media-id") or await element.get_attribute(
+            "data-mention-id"
+        )
+        if not value:
+            raise ValueError("Attached reference identity unverified")
+        values.append(identifier(value))
     if len(values) != len(set(values)):
         raise ValueError("Ambiguous attached references")
     return values
@@ -210,9 +406,7 @@ async def verify_configuration(page, request, refs, character=None):
         raise ConfigurationError("reference_mismatch", evidence)
     duration = request.get("duration")
     if duration:
-        match = re.fullmatch(r"(\d+)\s*s", duration)
-        if not match or not await selected(panel, f"{match.group(1)} s"):
-            raise ValueError("Duration not confirmed")
+        await verify_duration(panel, duration)
     return {
         "model": actual,
         "ratio": request["ratio"],
@@ -280,7 +474,13 @@ async def upload_reference(page, path, slot=None):
     deadline = asyncio.get_running_loop().time() + 60
     confirmed = False
     while asyncio.get_running_loop().time() < deadline:
-        current = set(await references(page))
+        try:
+            current = set(await references(page))
+        except ReferenceNotReady:
+            # Only while this invocation owns an in-flight upload. Never treat
+            # ambiguous/unknown chips or pre-submit busy state as valid proof.
+            await asyncio.sleep(0.25)
+            continue
         if not before.issubset(current):
             raise ValueError("An existing reference was replaced during upload")
         added = current - before
@@ -441,10 +641,7 @@ class UIAdapter:
         )
         await choose_model(menu, model)
         if job.get("duration"):
-            match = re.fullmatch(r"(\d+)\s*s", job["duration"])
-            if not match:
-                raise ValueError("Invalid duration")
-            await choose(panel, f"{match.group(1)} s")
+            await configure_duration(panel, job["duration"])
         self.expected = {
             "model": model,
             "type": job.get("type", "image"),
