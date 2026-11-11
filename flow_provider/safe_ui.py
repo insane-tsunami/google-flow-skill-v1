@@ -513,7 +513,7 @@ async def stable_asset_baseline(page, refs, *, timeout=30, quiet=1.0):
         await asyncio.sleep(0.1)
 
 
-async def new_asset(page, before, timeout=180, *, kind=None, prompt=None, quiet=1.0):
+async def new_asset(page, before, timeout=180, *, kind=None, prompt=None, quiet=1.0, observer=None):
     """Bind a newly created generated card through its observed progress lifecycle.
 
     Never use a unique new ID, latest card, prompt match alone, or media signature
@@ -525,6 +525,7 @@ async def new_asset(page, before, timeout=180, *, kind=None, prompt=None, quiet=
     bound = None
     candidate_ids = set()
     ready_since = None
+    last_evidence = None
     try:
         while True:
             candidates = []
@@ -540,6 +541,14 @@ async def new_asset(page, before, timeout=180, *, kind=None, prompt=None, quiet=
                 candidates.append(card)
             if len(candidates) > 1:
                 raise ValueError("Multiple generated cards: attribution uncertain")
+            evidence = {
+                "candidate_cards": len(candidates),
+                "candidate_ids": len(candidate_ids),
+                "bound": int(bound is not None),
+            }
+            if observer is not None and evidence != last_evidence:
+                observer("asset_lifecycle", evidence)
+                last_evidence = evidence
             if candidates:
                 card = candidates[0]
                 if bound is None:
@@ -817,35 +826,73 @@ class UIAdapter:
         self.cost = await self.verify_cost()
         return effective | {"credits": self.cost}
 
+    def set_submit_observer(self, observer):
+        self._submit_observer = observer
+
+    def observe_submit(self, stage, counts=None):
+        observer = getattr(self, "_submit_observer", None)
+        if observer is not None:
+            observer(stage, counts)
+
     async def submit(self, job):
         from .project import verify_account
 
+        self.observe_submit("authentication")
         await require_auth(self.page)
         verify_account(self.page.url, self.account_index)
+        self.observe_submit("project")
         await self.verify_project_identity()
+        self.observe_submit("references")
         if self.reference_job is not None:
             verify_reference_bytes(self.reference_job)
+        self.observe_submit("direct_mode")
         await self.ensure_direct_mode()
         character = getattr(self, "character", None)
+        self.observe_submit("character")
         if character is not None:
             await verify_character(self.page, character, saved=True)
         # Re-read after upload and prompt editing, immediately before click.
+        self.observe_submit("configuration")
         await verify_configuration(self.page, self.expected, self.refs, character)
+        self.observe_submit("cost")
         if await self.verify_cost() != self.cost:
             raise ConfigurationError("generation_cost_changed", {})
+        self.observe_submit("references")
         await (await control(self.page, "settings")).click()
         if sorted(await references(self.page, character)) != sorted(self.refs):
             raise ConfigurationError("reference_mismatch", {})
+        self.observe_submit("baseline")
         before = await stable_asset_baseline(self.page, self.refs)
-        verify_account(self.page.url, self.account_index)
-        await self.verify_project_identity()
-        if self.reference_job is not None:
-            verify_reference_bytes(self.reference_job)
-        if sorted(await references(self.page, character)) != sorted(self.refs):
-            raise ConfigurationError("reference_mismatch", {})
-        await (await control(self.page, "submit")).click()
+        try:
+            self.observe_submit(
+                "baseline",
+                {
+                    "baseline_ids": len(before["ids"]),
+                    "baseline_cards": await before["cards"].evaluate("es=>es.length"),
+                    "baseline_progressing": before["progressing"],
+                },
+            )
+            verify_account(self.page.url, self.account_index)
+            self.observe_submit("project")
+            await self.verify_project_identity()
+            self.observe_submit("references")
+            if self.reference_job is not None:
+                verify_reference_bytes(self.reference_job)
+            if sorted(await references(self.page, character)) != sorted(self.refs):
+                raise ConfigurationError("reference_mismatch", {})
+            button = await control(self.page, "submit")
+            self.observe_submit("before_click")
+            await button.click()
+            self.observe_submit("click_returned")
+        except BaseException:
+            await before["cards"].dispose()
+            raise
         return await new_asset(
-            self.page, before, kind=job.get("type", "image"), prompt=job.get("prompt")
+            self.page,
+            before,
+            kind=job.get("type", "image"),
+            prompt=job.get("prompt"),
+            observer=self.observe_submit,
         )
 
     def require_credit_approval(self):

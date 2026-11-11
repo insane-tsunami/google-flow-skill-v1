@@ -242,6 +242,6 @@ async def verify_character(page, proof, *, saved=False):
                 if current.get(key) != proof.get(key)
             ]
             # Field names only: never expose private URLs or voice descriptions.
-            raise ValueError(
-                "Saved character or associated voice changed (fields: " + ", ".join(changed) + ")"
-            )
+            from .diagnostics import ProofChanged
+
+            raise ProofChanged(changed)

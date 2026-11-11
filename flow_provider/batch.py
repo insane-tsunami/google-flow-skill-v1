@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .media import atomic_json, identifier, lexical_output, recover_output, validate
 from .security import ProfileLock
+from .diagnostics import event, failure
 
 
 # Explicit codes raised by safe_ui during configuration. Never infer eligibility
@@ -292,6 +293,7 @@ class Runner:
                             if isinstance(error, ConfigurationError)
                             else {}
                         )
+                        extra["failure"] = failure(error, "configure")
                         self.checkpoint(
                             row,
                             "failed",
@@ -304,11 +306,42 @@ class Runner:
                     # Durable uncertainty BEFORE any operation that might submit.
                     row["attempts"]["submit"] = 1
                     self.checkpoint(row, "uncertain", effective=effective)
+                    stage = "submit_entry"
+
+                    def observe(current_stage, counts=None):
+                        nonlocal stage
+                        evidence = event(current_stage, counts)
+                        stage = current_stage
+                        if current_stage == "baseline" and counts:
+                            row["baseline_evidence"] = evidence
+                        if current_stage == "before_click":
+                            evidence["click_status"] = "uncertain"
+                        elif current_stage == "click_returned":
+                            evidence["click_status"] = "returned"
+                        elif "click_status" in row.get("submit_evidence", {}):
+                            evidence["click_status"] = row["submit_evidence"]["click_status"]
+                        else:
+                            evidence["click_status"] = "not_reached"
+                        # Synchronous fsync/rename; a persistence error must stop
+                        # the adapter BEFORE the paid click, not after it.
+                        self.checkpoint(row, "uncertain", submit_evidence=evidence)
+
+                    setter = getattr(self.adapter, "set_submit_observer", None)
                     try:
+                        if setter is not None:
+                            setter(observe)
                         asset = identifier(await self.adapter.submit(job))
-                    except Exception:
-                        self.checkpoint(row, "uncertain", error="submit_or_identity_unconfirmed")
+                    except Exception as error:
+                        self.checkpoint(
+                            row,
+                            "uncertain",
+                            error="submit_or_identity_unconfirmed",
+                            failure=failure(error, stage),
+                        )
                         continue
+                    finally:
+                        if setter is not None:
+                            setter(None)
                     self.checkpoint(row, "submitted", asset=asset)
                 # Recover publication locally before consulting the retry budget.
                 destination = Path(job["file"])
