@@ -281,13 +281,40 @@ async def configure_duration(panel, duration):
         return
     current = await read_duration_slider(state)
     if current[1] == wanted:
+        await verify_duration(panel, duration)
         return
     slider, _, bounds, positions = state
-    await slider.press("Home")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10
+
+    async def bounded(operation, until):
+        remaining = until - loop.time()
+        if remaining <= 0:
+            raise ValueError("Duration keyboard readback failed")
+        try:
+            result = await asyncio.wait_for(operation(), timeout=remaining)
+        except asyncio.TimeoutError:
+            raise ValueError("Duration keyboard readback failed") from None
+        if loop.time() >= until:
+            raise ValueError("Duration keyboard readback failed")
+        return result
+
+    async def settled_readback(before, expected):
+        # Native range values change synchronously; rendered seconds may lag.
+        # Never send another key while that transition remains unconfirmed.
+        transition_deadline = min(deadline, loop.time() + 2)
+        while True:
+            observed = await bounded(lambda: read_duration_slider(state), transition_deadline)
+            if observed[0] == expected and (expected == before[0] or observed[1] != before[1]):
+                return observed
+            await bounded(lambda: asyncio.sleep(0.025), transition_deadline)
+
+    await bounded(lambda: slider.press("Home"), deadline)
+    observed = await settled_readback(current, bounds[0])
     previous = None
     seen = set()
     for index in range(positions):
-        position, semantic = await read_duration_slider(state)
+        position, semantic = observed
         if (
             (index == 0 and position != bounds[0])
             or (previous is not None and (position <= previous[0] or semantic == previous[1]))
@@ -296,11 +323,13 @@ async def configure_duration(panel, duration):
             raise ValueError("Duration keyboard readback failed")
         seen.add(semantic)
         if semantic == wanted:
-            await verify_duration(panel, duration)
+            await bounded(lambda: verify_duration(panel, duration), deadline)
             return
         previous = position, semantic
         if index + 1 < positions:
-            await slider.press("ArrowRight")
+            await bounded(lambda: slider.press("ArrowRight"), deadline)
+            step = (bounds[1] - bounds[0]) / (positions - 1)
+            observed = await settled_readback(previous, bounds[0] + (index + 1) * step)
     raise ValueError("Duration unavailable")
 
 
