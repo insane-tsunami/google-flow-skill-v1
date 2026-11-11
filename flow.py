@@ -274,7 +274,7 @@ def build_parser():
             type=int,
             choices=(1, 2),
             default=0,
-            help="One durable configuration-only extension for one exhausted pre-submit job; requires --retry-configuration --max-attempts 10",
+            help="One durable configuration-only extension for one exhausted pre-submit job; requires --retry-configuration --max-attempts ORIGINAL",
         )
         target = sub.choices[command].add_mutually_exclusive_group()
         target.add_argument(

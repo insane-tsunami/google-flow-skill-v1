@@ -128,11 +128,14 @@ submit automaticamente, mesmo que isso tenha ocorrido antes do clique real.
   configuração validada, o submit continua sujeito às aprovações normais.
 - `pending` com `dependency_unavailable`: o dependente não executou.
 
-Para um único job que já esgotou exatamente dez configurações e nunca teve
+Para um único job que já esgotou seu limite original (1–10) e nunca teve
 submit, uma autorização humana específica pode usar
-`--retry-configuration --max-attempts 10 --additional-configuration-attempts 1|2`.
+`--retry-configuration --max-attempts ORIGINAL --additional-configuration-attempts 1|2`.
 É uma única extensão durável, não renovável, somente de configuração: preserva
 fingerprint, contadores e histórico, não aumenta downloads nem tentativas pagas.
+O marcador persiste o limite original: 2 + 2 = 4, 10 + 2 = 12; reexecução não
+acumula extensão e não pode trocar o limite original. Manifestos legados sem
+campo de orçamento exigem contador esgotado exatamente igual ao limite explícito.
 Exige o mesmo número autorizado em cada retomada; omitir a opção não concede
 a extensão. Estado incerto ou pós-submit nunca é reconfigurado. Detalhes e
 resultado do smoke em `OMNI-CONTRACT-20261110.md`.

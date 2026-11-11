@@ -54,9 +54,7 @@ class Runner:
             or not 0 <= additional_configuration_attempts <= 2
         ):
             raise ValueError("additional_configuration_attempts must be 0..2")
-        if additional_configuration_attempts and (
-            not retry_configuration or max_attempts != 10 or len(jobs) != 1
-        ):
+        if additional_configuration_attempts and (not retry_configuration or len(jobs) != 1):
             raise ValueError(
                 "Configuration extension requires explicit recovery of one exhausted job"
             )
@@ -143,10 +141,22 @@ class Runner:
         self.checkpoint(row, "pending", configuration_recoveries=history)
 
     def _authorize_configuration_extension(self):
+        for item in self.data["jobs"]:
+            if "configuration_extension" in item:
+                sealed = item["configuration_extension"]
+                if (
+                    not isinstance(sealed, dict)
+                    or type(sealed.get("base")) is not int
+                    or sealed["base"] != self.maximum
+                ):
+                    raise ValueError("Original configuration ceiling cannot be changed")
         if not self.additional_configuration_attempts:
             return
         row, job = self.data["jobs"][0], self.jobs[0]
-        marker = {"base": 10, "additional": self.additional_configuration_attempts}
+        # Seal the exhausted ORIGINAL ceiling once, never add to the current
+        # configure counter on replay. Legacy manifests have no budget field;
+        # their exhausted counter must exactly match the explicit CLI ceiling.
+        marker = {"base": self.maximum, "additional": self.additional_configuration_attempts}
         if "configuration_extension" in row:
             existing = row["configuration_extension"]
             if (
@@ -157,7 +167,10 @@ class Runner:
                 raise ValueError("Configuration extension cannot be replaced or renewed")
             attempts = row.get("attempts", {})
             configure = attempts.get("configure")
-            if type(configure) is not int or not 10 <= configure <= self.configuration_maximum:
+            if (
+                type(configure) is not int
+                or not self.maximum <= configure <= self.configuration_maximum
+            ):
                 raise ValueError("Invalid extended configuration counter")
             if "submit" in attempts and (
                 type(attempts["submit"]) is not int
@@ -176,7 +189,7 @@ class Runner:
             row["state"] != "failed"
             or row.get("error") not in CONFIGURATION_FAILURES
             or type(attempts.get("configure")) is not int
-            or attempts["configure"] != 10
+            or attempts["configure"] != self.maximum
             or "submit" in attempts
             or "asset" in row
             or "result" in row
