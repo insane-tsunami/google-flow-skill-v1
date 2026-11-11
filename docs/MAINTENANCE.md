@@ -128,6 +128,18 @@ submit automaticamente, mesmo que isso tenha ocorrido antes do clique real.
   configuração validada, o submit continua sujeito às aprovações normais.
 - `pending` com `dependency_unavailable`: o dependente não executou.
 
+Para um único job que já esgotou seu limite original (1–10) e nunca teve
+submit, uma autorização humana específica pode usar
+`--retry-configuration --max-attempts ORIGINAL --additional-configuration-attempts 1|2`.
+É uma única extensão durável, não renovável, somente de configuração: preserva
+fingerprint, contadores e histórico, não aumenta downloads nem tentativas pagas.
+O marcador persiste o limite original: 2 + 2 = 4, 10 + 2 = 12; reexecução não
+acumula extensão e não pode trocar o limite original. Manifestos legados sem
+campo de orçamento exigem contador esgotado exatamente igual ao limite explícito.
+Exige o mesmo número autorizado em cada retomada; omitir a opção não concede
+a extensão. Estado incerto ou pós-submit nunca é reconfigurado. Detalhes e
+resultado do smoke em `OMNI-CONTRACT-20261110.md`.
+
 Tentativas de download têm limite persistente 1–10 (`--max-attempts`), backoff
 exponencial limitado a 10 s, e são contadas **antes** de executar. A espera pelo
 asset conhecido e controle de download é temporária/retryable, não falha terminal
@@ -276,3 +288,79 @@ exige `--max-attempts` explícito, dentro de 1–10. A transição é somente pa
 `download_recoveries` retém apenas código público e contador anterior sanitizados.
 Estado incerto, asset diferente, integridade e orçamento esgotado continuam
 bloqueados; a opção não substitui validação de recibo/arquivo nem corrige o DOM.
+
+## Issue #7: explicit project and Elements boundaries
+
+Local-only implementation; no Google session, account, profile or paid generation
+was used for this change. Examples in README are generic illustrative inputs.
+The selected branch is `fix/flow-elements-cli`; no commit/push/PR is part of this work.
+
+- `image`, `video`, `batch`: `--project-id` or `--project-url`, requiring explicit
+  `FLOW_ACCOUNT_INDEX`. Canonical URLs accept only the account-scoped Flow/Labs
+  origins and project paths, without query/fragment. Title is a separate exact
+  project navigation-header editable-input value or unique visible heading
+  assertion (`--project-title`), never lookup. Unknown/missing or
+  ambiguous title blocks. Account/project are checked after navigation, on cached
+  reuse, after uploads and immediately before submit. A persisted target conflict
+  blocks before opening a browser. Absence of explicit target retains isolated
+  creation. An existing project must not be edited concurrently by a human.
+- Repeat `--image` for local references on image/video; JSON uses ordered `images`
+  (exclusive with legacy `image`). References can name earlier batch jobs.
+  Video references require `mode: elements`; start/end frames cannot combine with
+  Elements, characters or explicit Elements mode. Incompatibility fails preflight.
+- Local file SHA-256 values, ordered references, project/account/title, requested
+  character, voice and mode enter the durable job fingerprint. Dependency output
+  bytes are captured before configuration and checked again before submit; their
+  producer job is already included in the manifest fingerprint. Final attached
+  IDs must match exactly, and uploads must preserve all previous attached IDs.
+  Changed/missing input bytes block; no automatic reset or repeated submit.
+- Privacy remains unchanged: report stores only the fingerprint, sanitized state
+  and effective settings; no prompt, reference file contents, title or URL is
+  added to persisted reports. `project.json` stores only project ID/account.
+  Reference hashes are in-memory inputs to the fingerprint. Legacy manifests with
+  different fingerprints block; do not migrate by deleting recovery evidence.
+
+### Observed saved-character contract
+
+Authorized attachment-only observation on 2026-11-10 supersedes the initial
+read-only limitation. Exact `.asset-title` plus character `.type-subtitle`, a
+unique active picker row and its scoped `flow-character-preview-pane` establish
+the saved entry. Include in prompt creates a `flow-character-ingredient-chip`
+whose image equals the selected row thumbnail. Generic `Elemento` and hover
+counts alone are not identity. The saved ID is not exposed; `--character-id`
+fails before browser access, while exact-name selection is implemented.
+
+Video validates full associated voice name, description and scoped audio sample;
+explicit voice is an assertion, not a replacement selector. Image skips voice.
+Pre-submit revalidation removes only the adapter-owned proven chip, rereads the
+same unique saved entry and reattaches; already attached entries are absent from
+the picker. Clicking an already active option includes it immediately, so the
+adapter reads that detail without clicking it. Ambiguous/incomplete search,
+missing variant evidence, truncation or association drift fails closed. Private
+URLs/IDs are compared only in memory and not persisted. Existing unproved human
+attachments are preserved and rejected; adapter-owned retained chips are checked
+and removed on the next configuration/retry.
+
+The second variant was previously misidentified as a placeholder. A fresh visual
+inspection found an actual full-body front/side/back reference; both images were
+loaded. This is an observation of that entry, not a general Body classifier or
+a promise of generation fidelity. No separately named portrait/body selector is
+offered. `docs/CHARACTER-CONTRACT.md` records acceptance boundaries. No Google
+generation or approval was clicked, no prompt was filled and no credits were
+spent. Direct Elements/model/cost gates remain required; Agent generation is not
+implemented by this change.
+
+### Local validation evidence
+
+`scratch/issue7-red.txt` records the initial five failing tests (one passed).
+`scratch/issue7-final.md` records exact commands, outcomes and environment limits.
+The first Codex sandbox Chromium launch failed with `setsockopt: Operation not
+permitted`; it was not counted as passing validation. Hermes then ran the full
+suite outside that sandbox with ephemeral offline Chromium: **242 passed** on
+Python **3.10.22** (209.88 s) and **242 passed** on Python **3.14.7** (217.88 s).
+Ruff lint/format, compileall and real image/video/batch `--help` passed. A first
+independent review returned FAIL (output-path dependency alias and missing mode
+recovery allowlist); both have dedicated regressions and fixes. This is offline
+functional/safety evidence, not paid Google service acceptance. Read-only DOM
+inspection used the already-running browser only, without adding attachments,
+changing voice, filling prompts, invoking generation or modifying profile data.

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .media import atomic_json, identifier, lexical_output, recover_output, validate
 from .security import ProfileLock
+from .diagnostics import event, failure
 
 
 # Explicit codes raised by safe_ui during configuration. Never infer eligibility
@@ -18,6 +19,7 @@ CONFIGURATION_FAILURES = frozenset(
         "configuration_mismatch",
         "mode_unconfirmed",
         "reference_mismatch",
+        "reference_mode_unconfirmed",
         "video_decoder_install_ffmpeg_and_ffprobe_on_PATH",
         "explicit_max_credits_required",
         "generation_cost_unknown",
@@ -41,12 +43,24 @@ class Runner:
         backoff=0.25,
         retry_configuration=False,
         retry_download=None,
+        additional_configuration_attempts=0,
     ):
         if not isinstance(max_attempts, int) or not 1 <= max_attempts <= 10:
             raise ValueError("max_attempts must be 1..10")
         self.path, self.jobs, self.adapter = Path(path), jobs, adapter
         self.maximum, self.backoff = max_attempts, backoff
         self.retry_configuration = retry_configuration
+        if (
+            type(additional_configuration_attempts) is not int
+            or not 0 <= additional_configuration_attempts <= 2
+        ):
+            raise ValueError("additional_configuration_attempts must be 0..2")
+        if additional_configuration_attempts and (not retry_configuration or len(jobs) != 1):
+            raise ValueError(
+                "Configuration extension requires explicit recovery of one exhausted job"
+            )
+        self.additional_configuration_attempts = additional_configuration_attempts
+        self.configuration_maximum = max_attempts + additional_configuration_attempts
         self.retry_download = identifier(retry_download) if retry_download is not None else None
         names = [identifier(j["name"]) for j in jobs]
         if len(names) != len(set(names)):
@@ -95,6 +109,7 @@ class Runner:
         atomic_json(self.path, self.data)
 
     def _recover_configuration(self, row, job):
+        # The separate ceiling never changes submit or download limits.
         attempts = row.get("attempts", {})
         configure = attempts.get("configure", 0)
         destination = Path(job["file"])
@@ -103,7 +118,7 @@ class Runner:
             or row["state"] != "failed"
             or row.get("error") not in CONFIGURATION_FAILURES
             or type(configure) is not int
-            or not 1 <= configure < self.maximum
+            or not 1 <= configure < self.configuration_maximum
             or "submit" in attempts
             or "asset" in row
             or "result" in row
@@ -125,6 +140,65 @@ class Runner:
         row.pop("error", None)
         row.pop("diagnostic", None)
         self.checkpoint(row, "pending", configuration_recoveries=history)
+
+    def _authorize_configuration_extension(self):
+        for item in self.data["jobs"]:
+            if "configuration_extension" in item:
+                sealed = item["configuration_extension"]
+                if (
+                    not isinstance(sealed, dict)
+                    or type(sealed.get("base")) is not int
+                    or sealed["base"] != self.maximum
+                ):
+                    raise ValueError("Original configuration ceiling cannot be changed")
+        if not self.additional_configuration_attempts:
+            return
+        row, job = self.data["jobs"][0], self.jobs[0]
+        # Seal the exhausted ORIGINAL ceiling once, never add to the current
+        # configure counter on replay. Legacy manifests have no budget field;
+        # their exhausted counter must exactly match the explicit CLI ceiling.
+        marker = {"base": self.maximum, "additional": self.additional_configuration_attempts}
+        if "configuration_extension" in row:
+            existing = row["configuration_extension"]
+            if (
+                not isinstance(existing, dict)
+                or existing != marker
+                or any(type(existing.get(k)) is not int for k in marker)
+            ):
+                raise ValueError("Configuration extension cannot be replaced or renewed")
+            attempts = row.get("attempts", {})
+            configure = attempts.get("configure")
+            if (
+                type(configure) is not int
+                or not self.maximum <= configure <= self.configuration_maximum
+            ):
+                raise ValueError("Invalid extended configuration counter")
+            if "submit" in attempts and (
+                type(attempts["submit"]) is not int
+                or attempts["submit"] != 1
+                or row["state"] in ("pending", "configuring")
+                or (row["state"] != "uncertain" and not row.get("asset"))
+            ):
+                raise ValueError("Invalid extended post-submit checkpoint")
+            if "asset" in row and "submit" not in attempts:
+                raise ValueError("Asset without submit checkpoint")
+            # Normal recovery gates still reject all post-submit states.
+            return
+        attempts = row.get("attempts", {})
+        destination = Path(job["file"])
+        if (
+            row["state"] != "failed"
+            or row.get("error") not in CONFIGURATION_FAILURES
+            or type(attempts.get("configure")) is not int
+            or attempts["configure"] != self.maximum
+            or "submit" in attempts
+            or "asset" in row
+            or "result" in row
+            or destination.exists()
+            or destination.is_symlink()
+        ):
+            raise ValueError("Configuration extension requires exhausted pre-submit failure")
+        self.checkpoint(row, row["state"], configuration_extension=marker)
 
     def _recover_download(self, row, job):
         attempts = row.get("attempts", {})
@@ -164,6 +238,7 @@ class Runner:
         # A separate lock also protects concurrent resume/manifest replacement.
         with ProfileLock(self.path.parent / ("." + self.path.name + ".lock")):
             self.data = self._load()
+            self._authorize_configuration_extension()
             atomic_json(self.path, self.data)
             for job, row in zip(self.jobs, self.data["jobs"]):
                 kind = job.get("type", "image")
@@ -193,16 +268,21 @@ class Runner:
                     self.checkpoint(row, "pending", error="dependency_unavailable")
                     continue
                 if not row.get("asset"):
+                    # Even an inconsistent checkpoint cannot spend twice.
+                    if "submit" in row.get("attempts", {}):
+                        self.checkpoint(row, "uncertain", error="submit_or_identity_unconfirmed")
+                        continue
                     destination = Path(job["file"])
                     if destination.exists() or destination.is_symlink():
                         self.checkpoint(row, "failed", error="output_destination_exists")
                         continue
+                    if row["attempts"].get("configure", 0) >= self.configuration_maximum:
+                        self.checkpoint(row, "failed", error="configure_attempts_exhausted")
+                        continue
                     self.checkpoint(row, "configuring")
                     row["attempts"]["configure"] = row["attempts"].get("configure", 0) + 1
                     atomic_json(self.path, self.data)
-                    if row["attempts"]["configure"] > self.maximum:
-                        self.checkpoint(row, "failed", error="configure_attempts_exhausted")
-                        continue
+
                     try:
                         effective = await self.adapter.configure(job)
                     except Exception as error:
@@ -213,6 +293,7 @@ class Runner:
                             if isinstance(error, ConfigurationError)
                             else {}
                         )
+                        extra["failure"] = failure(error, "configure")
                         self.checkpoint(
                             row,
                             "failed",
@@ -225,11 +306,42 @@ class Runner:
                     # Durable uncertainty BEFORE any operation that might submit.
                     row["attempts"]["submit"] = 1
                     self.checkpoint(row, "uncertain", effective=effective)
+                    stage = "submit_entry"
+
+                    def observe(current_stage, counts=None):
+                        nonlocal stage
+                        evidence = event(current_stage, counts)
+                        stage = current_stage
+                        if current_stage == "baseline" and counts:
+                            row["baseline_evidence"] = evidence
+                        if current_stage == "before_click":
+                            evidence["click_status"] = "uncertain"
+                        elif current_stage == "click_returned":
+                            evidence["click_status"] = "returned"
+                        elif "click_status" in row.get("submit_evidence", {}):
+                            evidence["click_status"] = row["submit_evidence"]["click_status"]
+                        else:
+                            evidence["click_status"] = "not_reached"
+                        # Synchronous fsync/rename; a persistence error must stop
+                        # the adapter BEFORE the paid click, not after it.
+                        self.checkpoint(row, "uncertain", submit_evidence=evidence)
+
+                    setter = getattr(self.adapter, "set_submit_observer", None)
                     try:
+                        if setter is not None:
+                            setter(observe)
                         asset = identifier(await self.adapter.submit(job))
-                    except Exception:
-                        self.checkpoint(row, "uncertain", error="submit_or_identity_unconfirmed")
+                    except Exception as error:
+                        self.checkpoint(
+                            row,
+                            "uncertain",
+                            error="submit_or_identity_unconfirmed",
+                            failure=failure(error, stage),
+                        )
                         continue
+                    finally:
+                        if setter is not None:
+                            setter(None)
                     self.checkpoint(row, "submitted", asset=asset)
                 # Recover publication locally before consulting the retry budget.
                 destination = Path(job["file"])

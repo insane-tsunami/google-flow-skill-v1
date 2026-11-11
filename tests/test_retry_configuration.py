@@ -23,7 +23,10 @@ class Adapter(FakeAdapter):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("previous_error", ["model_unavailable", "configuration_or_authentication"])
+@pytest.mark.parametrize(
+    "previous_error",
+    ["model_unavailable", "configuration_or_authentication", "reference_mode_unconfirmed"],
+)
 async def test_explicit_recovery_preserves_attempts_and_default_is_terminal(
     tmp_path, previous_error
 ):
