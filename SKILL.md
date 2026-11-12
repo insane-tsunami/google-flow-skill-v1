@@ -48,7 +48,7 @@ trabajo) y costo visible confirmado; costo desconocido bloquea. `--direct-mode`
 autoriza la transición por Agente/Agent (y Direto/Direct si aparece), verificada por el panel real de generación;
 sin opt-in el modo Agente bloquea. No confundir su botón tune con modelos.
 
-Opciones: `--ratio` (por defecto `9:16`), `--model`, `--out`, `--name`; video admite `--duration 8s` si el modelo ofrece esa duración. Ejemplos históricos (no enum ni garantía de disponibilidad): imagen `Nano Banana 2 Lite`, `Nano Banana 2`, `Nano Banana Pro`, `Imagen 4`; video `Veo 3.1 - Lite`, `Veo 3.1 - Fast`, `Veo 3.1 - Quality`, `Omni 1.1 Flash`. La disponibilidad real depende de Flow y de la cuenta.
+Opciones: `--ratio` (por defecto `9:16`), `--model`, `--out`, `--name`; `--mode` es solo para video. Para imagen con referencia y personaje usa `image --image referencia.png --character "Nombre completo"` junto con los argumentos obligatorios, **sin `--mode`**. Imagen con `--mode elements` o `--mode frames` se rechaza antes de abrir Chrome; JSON debe omitir `mode`. No se ignora ni convierte ese modo automáticamente. Video con referencias/personaje exige `--mode elements`. Video admite `--duration 8s` si el modelo ofrece esa duración. Ejemplos históricos (no enum ni garantía de disponibilidad): imagen `Nano Banana 2 Lite`, `Nano Banana 2`, `Nano Banana Pro`, `Imagen 4`; video `Veo 3.1 - Lite`, `Veo 3.1 - Fast`, `Veo 3.1 - Quality`, `Omni 1.1 Flash`. La disponibilidad real depende de Flow y de la cuenta.
 
 Cada trabajo descarga **un archivo**. Para varias variantes o imágenes por lotes, crea varios `jobs` con nombres distintos y `count: 1`; `count > 1` se rechaza para evitar perder resultados.
 

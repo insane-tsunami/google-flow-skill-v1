@@ -14,7 +14,12 @@ from flow_provider import browser, settings
 from flow_provider.batch import Runner
 from flow_provider.media import identifier, lexical_output
 from flow_provider.project import account_index, explicit_project, flow_url, verify_account
-from flow_provider.elements import exact_label, seal_references, validate_inputs
+from flow_provider.elements import (
+    ImageReferenceModeError,
+    exact_label,
+    seal_references,
+    validate_inputs,
+)
 from flow_provider.safe_ui import UIAdapter
 from flow_provider.security import auth_state
 
@@ -240,12 +245,12 @@ def build_parser():
             "--image",
             dest="images",
             action="append",
-            help="Local image reference; repeat for multiple Elements",
+            help="Local image reference; repeat for multiple references; images use this without --mode",
         )
         p.add_argument(
             "--mode",
             choices=("elements", "frames"),
-            help="Explicit reference mode (required for video Elements)",
+            help="Reference mode is video-only (required for video Elements); images use --image/--character without --mode",
         )
         p.add_argument(
             "--character",
@@ -325,6 +330,9 @@ def main():
         # Browser exceptions can contain signed URLs and DOM; never print them.
         from flow_provider.safe_ui import ConfigurationError
 
+        if isinstance(error, ImageReferenceModeError):
+            print(f"Operation blocked: {ImageReferenceModeError.guidance}", file=sys.stderr)
+            return 1
         if isinstance(error, ConfigurationError):
             print(f"Operation blocked: {error.code}", file=sys.stderr)
             return 1

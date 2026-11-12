@@ -308,6 +308,14 @@ The selected branch is `fix/flow-elements-cli`; no commit/push/PR is part of thi
   (exclusive with legacy `image`). References can name earlier batch jobs.
   Video references require `mode: elements`; start/end frames cannot combine with
   Elements, characters or explicit Elements mode. Incompatibility fails preflight.
+  `mode` is video-only: image `elements` **and** `frames` fail before browser
+  startup with guidance to omit `--mode`/JSON `mode`. Image references and saved
+  characters attach through the direct `+` picker, not video Elements controls.
+  Use `image --image reference.png --character "Full saved name"` with the required
+  model/prompt/name and approved project/cost options, without a mode. Single CLI,
+  batch preparation and adapter entry all enforce the same pure validation;
+  batch defaults do not provide or infer a reference mode. Existing invalid image
+  manifests must be preserved, not reset or rewritten to bypass fingerprints.
 - Local file SHA-256 values, ordered references, project/account/title, requested
   character, voice and mode enter the durable job fingerprint. Dependency output
   bytes are captured before configuration and checked again before submit; their

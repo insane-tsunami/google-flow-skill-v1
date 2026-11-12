@@ -776,9 +776,13 @@ class UIAdapter:
         await mode.click()
         await choose(panel, job.get("ratio", "9:16"))
         await choose(panel, "x1")
-        reference_mode = job.get("mode") or (
-            "frames" if job.get("start") or job.get("end") else None
-        )
+        # Elements/Frames is a video panel contract, not the image add/reference
+        # picker. validate_inputs rejects image modes before opening any browser.
+        reference_mode = None
+        if job.get("type", "image") == "video":
+            reference_mode = job.get("mode") or (
+                "frames" if job.get("start") or job.get("end") else None
+            )
         if reference_mode:
             await (await control(panel, reference_mode)).click()
         trigger = await control(panel, "model")

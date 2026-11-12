@@ -99,7 +99,9 @@ async def test_saved_character_stops_before_browser(tmp_path, monkeypatch, kind)
     launch = AsyncMock(side_effect=AssertionError("Must not open a browser"))
     monkeypatch.setattr(safe_ui.browser, "get_page", launch)
     adapter = safe_ui.UIAdapter(tmp_path / "project.json", max_credits=1)
-    job = dict(type=kind, mode="elements", character_id="saved")
+    job = dict(type=kind, character_id="saved")
+    if kind == "video":
+        job["mode"] = "elements"
     with pytest.raises(
         safe_ui.ConfigurationError, match="saved_character_id_not_exposed_use_exact_name"
     ):
