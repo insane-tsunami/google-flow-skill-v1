@@ -31,6 +31,18 @@ def exact_label(value):
     return value
 
 
+class ImageReferenceModeError(ValueError):
+    """Static public guidance safe to print without leaking job/browser values."""
+
+    guidance = (
+        "Reference mode is video-only; use image --image/--character without --mode "
+        "(JSON: omit mode)"
+    )
+
+    def __init__(self):
+        super().__init__(self.guidance)
+
+
 def validate_inputs(job):
     """Pure preflight, also used by the adapter before any browser startup."""
     kind = job.get("type", "image")
@@ -53,6 +65,8 @@ def validate_inputs(job):
     mode = job.get("mode")
     if mode not in (None, "frames", "elements"):
         raise ValueError("Mode must be frames or elements")
+    if kind == "image" and mode is not None:
+        raise ImageReferenceModeError()
     if frames and (elements or mode == "elements"):
         raise ValueError("Start/end frames cannot be combined with characters or Elements")
     if mode == "frames" and (kind != "video" or elements):

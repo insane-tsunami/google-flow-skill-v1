@@ -108,7 +108,15 @@ For example (illustrative, local reference files must exist):
 
 Run with `FLOW_ACCOUNT_INDEX=2 python flow.py batch illustrative.json --max-credits 1`.
 `images` is an ordered list; legacy JSON `image` remains supported separately.
-Video Elements require explicit `mode: "elements"`. Start/end frames use
+Video Elements require explicit `mode: "elements"`. **Images must omit `mode`**:
+image `--mode elements` and `--mode frames` (and their JSON equivalents) now
+fail pure preflight before any browser/profile access, rather than silently
+ignoring the option or searching for a video tab. For an image edit with a
+saved character, use `image --image ./reference.png --character "Full saved name"`
+plus the required model, prompt, name, project and cost arguments above, without
+`--mode`. Image references and characters use the direct `+` picker. CLI and
+batch preparation never infer a reference mode for images; `defaults` has no
+reference-mode setting. Video start/end frames use
 `mode: "frames"` (also inferred for legacy start/end jobs), and cannot combine
 with Elements or characters. Every job still produces exactly one file.
 
