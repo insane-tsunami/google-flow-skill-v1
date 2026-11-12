@@ -27,6 +27,7 @@ LABELS = {
     "upload": [
         "Carregar multimédia",
         "Enviar mídia",
+        "Fazer upload de mídia",
         "Upload media",
         "Cargar medios",
         "Cargar contenido multimedia",
@@ -109,6 +110,19 @@ async def unique(locator, *, optional=False):
 
 
 async def control(scope, key, *, optional=False):
+    if key == "upload":
+        # The current picker owns upload in its side nav, not its asset list or
+        # detail pane. Once that owner exists, never fall back to unrelated
+        # matching labels/test IDs elsewhere in the picker.
+        owners = scope.locator("flow-add-menu-side-nav:visible")
+        if await owners.count():
+            owner = await unique(owners)
+            return await unique(
+                owner.locator("button.sidebar-upload-btn").and_(
+                    owner.get_by_role("button", name=pattern(key))
+                ),
+                optional=optional,
+            )
     for locator in [
         scope.locator(f'[data-testid="flow-{key}"]'),
         scope.locator(STRUCTURE.get(key, ":not(*)")),

@@ -52,6 +52,15 @@ async def test_image_reference_and_character_without_video_tabs(page, tmp_path, 
     await page.locator("flow-prompt-box").evaluate("e=>e.replaceWith(...e.childNodes)")
     character_html = await page.locator("body").inner_html()
     png = await app(page)
+    from test_observed_upload_sidebar import SIDEBAR
+
+    # Real sidebar upload contract, exercised together with saved-character,
+    # exact model/cost proof and pre-submit drift protection (never submit).
+    await page.locator('#uploadPanel [role="option"]').evaluate("e=>e.remove()")
+    await page.locator("#uploadPanel").evaluate(
+        "(e, html)=>e.insertAdjacentHTML('afterbegin',html)", SIDEBAR
+    )
+    await page.evaluate("window.uploadClicks=0")
     await page.evaluate("html=>document.body.insertAdjacentHTML('beforeend',html)", character_html)
     await page.get_by_role("button", name="Adicionar elementos à caixa de comando").evaluate(
         "e=>e.remove()"
