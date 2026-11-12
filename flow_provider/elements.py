@@ -139,16 +139,33 @@ async def picker_character(page, name, kind, voice=None):
     deadline = time.monotonic() + 3
     stable_since = time.monotonic()
     previous = None
+    # Observed Flow declares each variant as a labelled thumbnail button whose
+    # image is rendered later (live: a placeholder for ~0.7 s, longer than the
+    # quiet window). When that row exists, every declared slot must hold
+    # exactly one image and no placeholder; extra/unslotted images are refused.
+    slots_js = """p=>{const row=p.querySelector('.character-thumbnail-row');
+      if(!row)return null;
+      const slots=[...row.querySelectorAll('.character-thumbnail-button')];
+      const all=p.querySelectorAll('.character-thumbnail-image').length;
+      return {all, slots:slots.map(s=>({
+        images:s.querySelectorAll('.character-thumbnail-image').length,
+        placeholders:s.querySelectorAll('.character-thumbnail-placeholder').length}))}}"""
     while True:
         variants = await preview.locator(".character-thumbnail-image").evaluate_all(
             "es=>es.map(e=>({src:e.getAttribute('src'),loaded:e.complete&&e.naturalWidth>0}))"
         )
         sources = [v["src"] for v in variants]
+        slots = await preview.evaluate(slots_js)
+        complete = slots is None or (
+            bool(slots["slots"])
+            and all(s["images"] == 1 and not s["placeholders"] for s in slots["slots"])
+            and slots["all"] == len(slots["slots"])
+        )
         now = time.monotonic()
-        if sources != previous:
-            previous = sources
+        if [sources, slots] != previous:
+            previous = [sources, slots]
             stable_since = now
-        if sources and all(sources) and now - stable_since >= 0.3:
+        if complete and sources and all(sources) and now - stable_since >= 0.3:
             break
         if now >= deadline:
             raise ValueError("Character variants did not stabilize")
