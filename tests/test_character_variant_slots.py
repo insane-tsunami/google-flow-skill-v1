@@ -41,8 +41,13 @@ async def test_placeholder_slot_longer_than_quiet_window_is_awaited(page):
 
 async def test_saved_roundtrip_with_late_slot_has_no_spurious_drift(page):
     await observed_dom(page)
-    await page.evaluate(resolve_slot_after(1500))
+    # Seal the complete initial proof before testing delayed saved revalidation.
+    await page.locator(".character-thumbnail-placeholder").evaluate(
+        "e=>e.outerHTML='" + IMG.format(n=2) + "'"
+    )
     proof = await attach_character(page, dict(character="Unique", type="image"))
+    assert proof["variants"] == ["/image/v1", "/image/v2"]
+    await page.evaluate(resolve_slot_after(1500))
     # Flow re-renders the pane on reopen: placeholder again, image later.
     await (
         page.locator(".character-thumbnail-image")
