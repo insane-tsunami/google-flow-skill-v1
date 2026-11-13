@@ -330,6 +330,17 @@ class Runner:
                     try:
                         if setter is not None:
                             setter(observe)
+                        intent_setter = getattr(self.adapter, "set_job_intent", None)
+                        if intent_setter is not None:
+                            from .service_records import digest
+
+                            def persist_intent(intent):
+                                self.checkpoint(row, "uncertain", service_intent=intent)
+
+                            intent_setter(
+                                digest({"fingerprint": self.fingerprint, "job": job}),
+                                persist_intent,
+                            )
                         asset = identifier(await self.adapter.submit(job))
                     except Exception as error:
                         self.checkpoint(
@@ -361,6 +372,9 @@ class Runner:
                     row["attempts"]["download"] = tries + 1
                     self.checkpoint(row, "downloading")
                     try:
+                        proof_setter = getattr(self.adapter, "set_service_proof", None)
+                        if proof_setter is not None:
+                            proof_setter(row.get("service_intent"))
                         result = await self.adapter.download(job, row["asset"])
                         if result["asset"] != row["asset"]:
                             raise ValueError("Wrong asset receipt")

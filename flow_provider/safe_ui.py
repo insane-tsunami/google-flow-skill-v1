@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import time
+import hashlib
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -31,6 +33,10 @@ from .media import (
 )
 from .security import require_auth
 from .selectors import control, unique
+
+# Install only after a legitimate captured generation request proves its RPC and
+# exact prompt/configuration slots. No CLI opt-in can invent this paid contract.
+GENERATION_CONTRACT = None
 
 PANEL = "flow-prompt-box-settings:visible"
 CARDS = 'flow-grid-tile-container, flow-tile-container, [aria-roledescription="draggable"]'
@@ -652,10 +658,22 @@ async def upload_reference(page, path, slot=None):
 
 
 class UIAdapter:
-    def __init__(self, project_file, *, direct_mode=False, max_credits=None, project_scope=None):
+    def __init__(
+        self,
+        project_file,
+        *,
+        direct_mode=False,
+        max_credits=None,
+        project_scope=None,
+        service_contract=None,
+    ):
         from .project import account_index
 
+        from .service_records import ObservedMediaDetail
+
         self.account_index = account_index()
+        self.service_contract = service_contract or ObservedMediaDetail(self.account_index)
+        self.generation_contract = GENERATION_CONTRACT
         self.project_scope = project_scope
         self.project_id = None
         self.reference_job = None
@@ -691,6 +709,12 @@ class UIAdapter:
         if data and self.project_scope and data.get("project") != self.project_scope["project"]:
             raise ValueError("Persisted project target mismatch")
         page = await browser.get_page()
+        from .service_records import ServiceObserver
+
+        self.service = ServiceObserver(page, self.account_index)
+        target = data["project"] if data else (self.project_scope or {}).get("project")
+        if target:
+            self.service.scope(target)
         new_project = None
         if self.project_file.exists():
             data = json.loads(self.project_file.read_text())
@@ -707,6 +731,7 @@ class UIAdapter:
         verify_account(page.url, self.account_index)
         self.project_id = new_project if new_project is not None else identifier(data["project"])
         self.page = page
+        self.service.scope(self.project_id)
         await self.verify_project_identity()
         if new_project is not None:
             atomic_json(
@@ -721,6 +746,10 @@ class UIAdapter:
             verify_project(self.page.url, self.project_id, self.account_index)
         title = self.project_scope.get("title") if self.project_scope else None
         if title is not None:
+            if "/edit/" in urlsplit(self.page.url).path:
+                if not getattr(self, "_project_title_verified", False):
+                    raise ValueError("Project title was not verified before opening editor")
+                return
             # Observed Flow title is a navigation-header editable input; a
             # unique exact heading remains supported for older layouts.
             field = await unique(
@@ -732,6 +761,7 @@ class UIAdapter:
                     raise ValueError("Explicit project title mismatch")
             else:
                 await unique(self.page.get_by_role("heading", name=title, exact=True))
+            self._project_title_verified = True
 
     async def configure(self, job):
         validate_inputs(job)
@@ -866,38 +896,190 @@ class UIAdapter:
         if sorted(await references(self.page, character)) != sorted(self.refs):
             raise ConfigurationError("reference_mismatch", {})
         self.observe_submit("baseline")
-        before = await stable_asset_baseline(self.page, self.refs)
-        try:
-            self.observe_submit(
-                "baseline",
-                {
-                    "baseline_ids": len(before["ids"]),
-                    "baseline_cards": await before["cards"].evaluate("es=>es.length"),
-                    "baseline_progressing": before["progressing"],
-                },
-            )
-            verify_account(self.page.url, self.account_index)
-            self.observe_submit("project")
-            await self.verify_project_identity()
-            self.observe_submit("references")
-            if self.reference_job is not None:
-                verify_reference_bytes(self.reference_job)
-            if sorted(await references(self.page, character)) != sorted(self.refs):
-                raise ConfigurationError("reference_mismatch", {})
-            button = await control(self.page, "submit")
-            self.observe_submit("before_click")
-            await button.click()
-            self.observe_submit("click_returned")
-        except BaseException:
-            await before["cards"].dispose()
-            raise
-        return await new_asset(
-            self.page,
-            before,
-            kind=job.get("type", "image"),
-            prompt=job.get("prompt"),
-            observer=self.observe_submit,
+        from .service_records import digest, select_record, stable_record_proof
+
+        if self.service_contract is None:
+            raise ValueError("Service parameter and scoped named detail contract unavailable")
+        if self.generation_contract is None:
+            raise ValueError("Observed generation invocation contract unavailable; no paid click")
+        timeout = job.get("generation_timeout", 180)
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or not 0 < timeout <= 600
+        ):
+            raise ValueError("generation_timeout must be finite and in (0, 600]")
+        configuration = dict(
+            self.expected,
+            reference_ids=list(self.refs),
+            character=job.get("character"),
+            voice=job.get("voice"),
         )
+        baseline = await self.service.baseline(timeout=5)
+        start = time.time_ns()
+        intent = {
+            "version": 1,
+            "id": digest([self.request_hash, start]),
+            "project": self.project_id,
+            "account": self.account_index,
+            "prompt_hash": digest(job["prompt"]),
+            "prompt_sha256": hashlib.sha256(job["prompt"].encode()).hexdigest(),
+            "request_hash": self.request_hash,
+            "request": {"kind": job["type"], "reference_count": len(self.refs)},
+            "effective_configuration": self.expected,
+            "baseline": sorted(digest(asset) for asset in baseline),
+            "reference_hashes": [digest(ref) for ref in self.refs],
+            "start_ns": start,
+        }
+        # Runner's callback synchronously fsyncs this before any submit click.
+        self._intent_observer(intent)
+        verify_account(self.page.url, self.account_index)
+        await self.verify_project_identity()
+        if self.reference_job is not None:
+            verify_reference_bytes(self.reference_job)
+        if sorted(await references(self.page, character)) != sorted(self.refs):
+            raise ConfigurationError("reference_mismatch", {})
+        button = await control(self.page, "submit")
+        self.observe_submit("before_click")
+        self.service.arm(job["prompt"], self.generation_contract, configuration)
+        await button.click()
+        self.observe_submit("click_returned")
+        self.observe_submit("asset_lifecycle")
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            await self.service.flush(
+                timeout=max(0.001, deadline - asyncio.get_running_loop().time())
+            )
+            candidates = [
+                r
+                for r in self.service.records.values()
+                if r.asset not in baseline
+                and r.prompt == job["prompt"]
+                and r.kind == job["type"]
+                and r.asset in self.service.linked
+            ]
+            if candidates:
+                record = select_record(
+                    candidates,
+                    baseline=baseline,
+                    project=self.project_id,
+                    kind=job["type"],
+                    prompt=job["prompt"],
+                    start_ns=start,
+                    end_ns=time.time_ns(),
+                )
+                if stable_record_proof(
+                    self.service.linked[record.asset]["record"]
+                ) != stable_record_proof(record.proof()):
+                    raise ValueError("Linked record changed before verification")
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("Owning service record deadline exceeded")
+                await asyncio.wait_for(self.verify_service_result(job, record), timeout=remaining)
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError("Owning service record deadline exceeded")
+                intent["proof"] = self.service.linked[record.asset]
+                self._intent_observer(intent)
+                return "service-" + digest(record.asset)
+            await asyncio.sleep(0.1)
+        raise TimeoutError("Owning service record not confirmed")
+
+    def set_job_intent(self, request_hash, observer):
+        self.request_hash = request_hash
+        self._intent_observer = observer
+
+    async def verify_service_result(self, job, record):
+        if self.service_contract is None:
+            raise ValueError("Service parameter and scoped named detail contract unavailable")
+        editor = "flow-image-editor" if record.kind == "image" else "flow-scene-builder"
+        active_editors = await self.page.locator(editor + ":visible").count()
+        if active_editors > 1:
+            raise ValueError("Ambiguous service editor")
+        card = None if active_editors == 1 else await self.physical_service_card(job, record)
+        return await self.service_contract.verify(self.page, card, record, job, self.refs)
+
+    async def physical_service_card(self, job, record):
+        from .service_records import match_physical_tile
+
+        cards = await self.page.locator(
+            f":is({CARDS}):visible:not(:has(:is({CARDS}))):has(flow-{job['type']}-tile)"
+        ).all()
+        sources = []
+        for card in cards:
+            other = "video" if job["type"] == "image" else "image"
+            if (
+                await card.locator(f"flow-{job['type']}-tile").count() != 1
+                or await card.locator(f"flow-{other}-tile").count()
+            ):
+                raise ValueError("Ambiguous physical service media kind")
+            urls = [
+                await media.get_attribute("src")
+                for media in await card.locator(f"flow-{job['type']}-tile img").all()
+            ]
+            sources.append(urls)
+        from .service_records import canonical_thumbnail
+
+        normalized = [
+            {canonical_thumbnail(url, self.account_index) for url in urls} for urls in sources
+        ]
+        direct = [index for index, paths in enumerate(normalized) if record.thumbnail in paths]
+        if len(direct) > 1:
+            raise ValueError("Ambiguous physical service target")
+        if len(direct) == 1:
+            return cards[direct[0]]
+        if not record.group_id:
+            return cards[match_physical_tile([record], sources, self.account_index)]
+        # Only explicit server group membership may locate a gallery cover.
+        peers = [
+            r
+            for r in self.service.records.values()
+            if r.group_id == record.group_id
+            and r.project == record.project
+            and r.kind == record.kind
+        ]
+        paths = {peer.thumbnail for peer in peers}
+        indices = [
+            index
+            for index, urls in enumerate(sources)
+            if paths & {canonical_thumbnail(url, self.account_index) for url in urls}
+        ]
+        if len(indices) != 1:
+            raise ValueError("Missing or ambiguous physical history group") from None
+        return cards[indices[0]]
+
+    def set_service_proof(self, intent):
+        self.resume_intent = intent
+
+    async def service_card(self, job, asset):
+        from .service_records import digest, stable_record_proof
+
+        await self.service.flush()
+        record = self.service.known(asset.removeprefix("service-"))
+        if record.kind != job["type"] or record.project != self.project_id:
+            raise ValueError("Service record scope mismatch")
+        intent = getattr(self, "resume_intent", None)
+        if (
+            not isinstance(intent, dict)
+            or intent.get("project") != self.project_id
+            or intent.get("account") != self.account_index
+            or intent.get("prompt_hash") != digest(job["prompt"])
+            or not isinstance(intent.get("proof"), dict)
+            or not isinstance(intent["proof"].get("record"), dict)
+            or stable_record_proof(intent["proof"]["record"]) != stable_record_proof(record.proof())
+        ):
+            raise ValueError("Durable service invocation proof missing or changed")
+        verified_target = await self.verify_service_result(job, record)
+        if record.kind == "video":
+            # Download the exact proved history clip, never the selected scene
+            # or its potentially stale/combined top-level export action.
+            if verified_target is None or await verified_target.count() != 1:
+                raise ValueError("Exact video download target unavailable")
+            return verified_target
+        header = self.page.locator("flow-editor-header")
+        if await header.count() == 1 and await header.is_visible():
+            return header
+        raise ValueError("Verified image download header unavailable")
 
     def require_credit_approval(self):
         value = self.max_credits
@@ -1002,22 +1184,44 @@ class UIAdapter:
             raise ConfigurationError("direct_mode_unconfirmed", {}) from None
 
     async def download(self, job, asset):
-        from .project import verify_account
+        from .project import verify_account, navigate_to_project
 
+        if (
+            asset.startswith("service-")
+            and self.page is not None
+            and "/edit/" in urlsplit(self.page.url).path
+        ):
+            verify_account(self.page.url, self.account_index)
+            await self.verify_project_identity()
+            # Re-authenticate on the known gallery, not the asset editor's
+            # different composer/header title contract.
+            await navigate_to_project(self.project_id, expected=self.account_index)
         await self.ensure_project()
         verify_account(self.page.url, self.account_index)
+        if asset.startswith("service-"):
+            # Reload and reobserve: thumbnail URLs are deliberately never persisted.
+            await self.service.flush()
+            self.service.records = {}
+            self.service.frames = 0
+            from .project import navigate_to_project
+
+            # Return to the gallery, not the selected editor's history tiles.
+            await navigate_to_project(self.project_id, expected=self.account_index)
+            await self.verify_project_identity()
+            await self.service.baseline(timeout=5)
+            return await download_asset(self.page, job, asset, resolver=self.service_card)
         return await download_asset(self.page, job, asset)
 
 
-async def download_asset(page, job, asset):
+async def download_asset(page, job, asset, *, resolver=None):
     from .security import ProfileLock
 
     destination = lexical_output(job["file"])
     with ProfileLock(destination.parent / ("." + destination.name + ".lock")):
-        return await _download_asset(page, job, asset)
+        return await _download_asset(page, job, asset, resolver=resolver)
 
 
-async def _download_asset(page, job, asset):
+async def _download_asset(page, job, asset, *, resolver=None):
     asset = identifier(asset)
     destination = lexical_output(job["file"])
     receipt = destination.with_name(destination.name + ".receipt.json")
@@ -1044,8 +1248,8 @@ async def _download_asset(page, job, asset):
         menu_open = False
         while True:
             remaining()
-            cards = await asset_map(page)
-            card = cards.get(asset)
+            cards = await asset_map(page) if resolver is None else {}
+            card = await resolver(job, asset) if resolver is not None else cards.get(asset)
             if card is not None:
                 other = "image" if job["type"] == "video" else "video"
                 if await card.locator(f"flow-{other}-tile").count():

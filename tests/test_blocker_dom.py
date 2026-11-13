@@ -32,7 +32,10 @@ async def test_navigation_uses_captured_scope(tmp_path, monkeypatch, resume, sco
     page = type(
         "Page",
         (),
-        {"url": "https://flow.google.com" + (f"/u/{scope}" if scope else "") + "/project/p"},
+        {
+            "url": "https://flow.google.com" + (f"/u/{scope}" if scope else "") + "/project/p",
+            "on": lambda *args: None,
+        },
     )()
     monkeypatch.setattr(ui.browser, "get_page", AsyncMock(return_value=page))
     monkeypatch.setattr(ui, "require_auth", AsyncMock())

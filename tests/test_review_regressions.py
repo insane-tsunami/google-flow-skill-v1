@@ -45,7 +45,9 @@ async def test_failed_initialization_does_not_poison_next_job(tmp_path, monkeypa
     import flow_provider.safe_ui as ui
 
     calls = []
-    fake_page = type("Page", (), {"url": "https://flow.google.com/project/project-1"})()
+    fake_page = type(
+        "Page", (), {"url": "https://flow.google.com/project/project-1", "on": lambda *args: None}
+    )()
 
     async def page():
         return fake_page

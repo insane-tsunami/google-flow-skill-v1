@@ -76,7 +76,7 @@ async def app(page, payload=None):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("confirmation", [False, True])
-async def test_real_cli_reference_generate_download_resume(
+async def test_cli_without_observed_service_preserves_reference_uncertainty(
     page, tmp_path, monkeypatch, confirmation
 ):
     png = await app(page)
@@ -120,14 +120,14 @@ async def test_real_cli_reference_generate_download_resume(
             str(tmp_path),
         ]
     )
-    assert await flow.execute(args) == 0
-    assert await flow.execute(args) == 0
-    assert await page.evaluate("window.submits") == 1
+    assert await flow.execute(args) == 1
+    assert await flow.execute(args) == 1
+    assert await page.evaluate("window.submits") == 0
     report = json.loads((directory / "batch_report.json").read_text())["jobs"][0]
-    assert report["state"] == "completed"
-    assert report["result"]["asset"] == "asset-1"
+    assert report["state"] == "uncertain"
+    assert report["attempts"]["submit"] == 1
     assert report["effective"]["reference_count"] == 1
-    assert Path(report["result"]["file"]).read_bytes() == png
+    assert not (directory / "demo.png").exists()
 
 
 @pytest.mark.asyncio
