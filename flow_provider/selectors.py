@@ -69,7 +69,15 @@ LABELS = {
     "voice": ["Voz", "Voice"],
     "initial": ["Início", "Inicio", "Start", "Iniciar"],
     "final": ["Fim", "Fin", "End"],
-    "download": ["Transferir", "Baixar", "Descarregar", "Download", "Descargar"],
+    "download": [
+        "Transferir",
+        "Baixar",
+        "Baixar mídia",
+        "Fazer o download",
+        "Descarregar",
+        "Download",
+        "Descargar",
+    ],
     "more": ["Mais opções", "More options", "Más opciones"],
     "login": ["Iniciar sessão", "Fazer login", "Sign in", "Iniciar sesión"],
 }

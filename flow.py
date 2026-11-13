@@ -150,6 +150,11 @@ async def check_session(login=False):
 
 
 async def execute(args):
+    if args.cmd == "reconcile":
+        from flow_provider.reconcile import audit
+
+        print(json.dumps(audit(args.report, args.evidence, args.output)))
+        return 0
     if args.cmd in ("status", "login"):
         if args.cmd == "login":
             if settings.FLOW_HEADLESS:
@@ -230,6 +235,12 @@ async def execute(args):
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
+    reconcile = sub.add_parser(
+        "reconcile", help="Read-only independent historical evidence audit; never changes job state"
+    )
+    reconcile.add_argument("--report", required=True)
+    reconcile.add_argument("--evidence", required=True)
+    reconcile.add_argument("--output", required=True)
     sub.add_parser("status", help="Non-generating live authentication check")
     sub.add_parser("login", help="Human login with exclusive profile ownership")
     for kind in ("image", "video"):

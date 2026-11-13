@@ -102,5 +102,6 @@ async def test_submit_reads_visible_cost_before_closing(page, tmp_path, monkeypa
         with pytest.raises(ValueError, match="cost_changed"):
             await adapter.submit({})
     else:
-        assert await adapter.submit({}) == "offline-asset"
-    assert await page.evaluate("window.submits || 0") == (0 if drift else 1)
+        with pytest.raises(ValueError, match="generation invocation contract unavailable"):
+            await adapter.submit({})
+    assert await page.evaluate("window.submits || 0") == 0

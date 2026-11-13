@@ -220,7 +220,10 @@ async def test_explicit_project_never_creates(tmp_path, monkeypatch, redirect):
     page = type(
         "Page",
         (),
-        {"url": "https://flow.google.com/u/2/project/" + ("other" if redirect else "example")},
+        {
+            "url": "https://flow.google.com/u/2/project/" + ("other" if redirect else "example"),
+            "on": lambda *args: None,
+        },
     )()
     monkeypatch.setattr(safe_ui.browser, "get_page", AsyncMock(return_value=page))
     monkeypatch.setattr(safe_ui, "require_auth", AsyncMock())

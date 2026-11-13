@@ -11,16 +11,25 @@ from flow_provider.diagnostics import ProofChanged, event, failure
 @pytest.mark.parametrize("fault", ["character", "click", "lifecycle", "disk", "atomic_failure"])
 async def test_real_browser_fault_boundaries(page, tmp_path, monkeypatch, fault):
     url = "https://flow.google.com/u/1/project/offline"
-    await page.route(
-        "**/*",
-        lambda route: route.fulfill(
-            body="""
-      <button aria-label="settings">settings</button>
-      <button aria-label="submit" onclick="window.clicks=(window.clicks||0)+1">submit</button>
-      <div id="gallery"></div>""",
-            content_type="text/html",
-        ),
-    )
+    from test_service_records import record
+    from flow_provider.service_records import ServiceObserver
+
+    old = record(prompt="older unrelated prompt", asset="old-record")
+    old[1] = "offline"
+
+    async def route(route):
+        if "batchexecute" in route.request.url:
+            await route.fulfill(body=json.dumps([old]), content_type="application/json")
+        else:
+            await route.fulfill(
+                body="""
+          <button aria-label="settings">settings</button>
+          <button aria-label="submit" onclick="window.clicks=(window.clicks||0)+1">submit</button>
+          <div id="gallery"></div>""",
+                content_type="text/html",
+            )
+
+    await page.route("**/*", route)
     await page.goto(url)
     report = tmp_path / "report.json"
 
@@ -46,6 +55,11 @@ async def test_real_browser_fault_boundaries(page, tmp_path, monkeypatch, fault)
     adapter = ui.UIAdapter(tmp_path / "project.json", max_credits=30)
     adapter.account_index = "1"
     adapter.page = page
+    adapter.project_id = "offline"
+    adapter.service = ServiceObserver(page, "1")
+    adapter.service.scope("offline")
+    await page.evaluate("fetch('/u/1/_/AiSandboxAngularFrontend/data/batchexecute')")
+    await adapter.service.flush()
     adapter.refs = []
     adapter.expected = {}
     adapter.reference_job = None
@@ -64,19 +78,6 @@ async def test_real_browser_fault_boundaries(page, tmp_path, monkeypatch, fault)
     monkeypatch.setattr(ui, "verify_configuration", config)
     monkeypatch.setattr(ui, "verify_character", character)
     monkeypatch.setattr(ui, "control", control)
-    real_baseline = ui.stable_asset_baseline
-
-    async def baseline(*args):
-        return await real_baseline(*args, timeout=1, quiet=0.02)
-
-    monkeypatch.setattr(ui, "stable_asset_baseline", baseline)
-    real_new = ui.new_asset
-
-    async def lifecycle(*args, **kwargs):
-        # Real browser lifecycle with no matching generated media must time out.
-        return await real_new(*args, **kwargs, timeout=0.15, quiet=0.02)
-
-    monkeypatch.setattr(ui, "new_asset", lifecycle)
     observed = []
     original_observe = adapter.observe_submit
 
@@ -91,7 +92,13 @@ async def test_real_browser_fault_boundaries(page, tmp_path, monkeypatch, fault)
 
     monkeypatch.setattr(adapter, "observe_submit", observe)
     jobs = [
-        {"name": "video", "type": "video", "prompt": "SECRET", "file": str(tmp_path / "video.mp4")}
+        {
+            "name": "video",
+            "type": "video",
+            "prompt": "SECRET",
+            "file": str(tmp_path / "video.mp4"),
+            "generation_timeout": 0.15,
+        }
     ]
     runner = Runner(report, jobs, adapter, max_attempts=1)
     if fault == "atomic_failure":
@@ -138,7 +145,7 @@ async def test_real_browser_fault_boundaries(page, tmp_path, monkeypatch, fault)
             stage == "before_click" and evidence["click_status"] == "uncertain"
             for stage, _, evidence in observed
         )
-        assert row["baseline_evidence"]["counts"]["baseline_cards"] == 0
+        assert len(row["service_intent"]["baseline"]) == 1
     original = report.read_bytes()
     assert await Runner(report, jobs, adapter, max_attempts=1).run() == 1
     assert report.read_bytes() == original

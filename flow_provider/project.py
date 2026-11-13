@@ -91,7 +91,24 @@ def explicit_project(value, expected):
 
 def verify_project(url, project, expected):
     if expected is not None:
-        if explicit_project(url, expected) != project:
+        verify_account(url, expected)
+        parsed = urlsplit(url)
+        # Observed existing image editor route. This does not widen accepted
+        # --project-url inputs; their explicit_project parser stays root-only.
+        editor = (
+            re.fullmatch(
+                rf"/u/{re.escape(expected)}/project/([A-Za-z0-9_-]+)/edit/"
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                parsed.path,
+            )
+            if parsed.netloc == "flow.google.com"
+            else None
+        )
+        if editor and not parsed.query and not parsed.fragment:
+            actual = editor.group(1)
+        else:
+            actual = explicit_project(url, expected)
+        if actual != project:
             raise ValueError("Project identity changed")
     else:
         verify_account(url, expected)

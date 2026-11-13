@@ -1,5 +1,10 @@
 # Manutenção e validação segura (#1–#5)
 
+> **Rascunho #12, não instalar:** a atribuição por registros de serviço tem
+> mapeamento/download existente validado, mas geração nova fica bloqueada antes
+> do clique até existir contrato observado do RPC/slots de geração. Fixtures
+> sintéticas não são contrato do serviço real. Ver `SERVICE-RECORDS.md`.
+
 ## Instalação isolada
 
 Requer Python **3.10+**, Chrome de desktop e FFmpeg/ffprobe no PATH para vídeos.
@@ -372,3 +377,32 @@ recovery allowlist); both have dedicated regressions and fixes. This is offline
 functional/safety evidence, not paid Google service acceptance. Read-only DOM
 inspection used the already-running browser only, without adding attachments,
 changing voice, filling prompts, invoking generation or modifying profile data.
+
+## Passive service attribution (issue #12)
+
+The service contract in [SERVICE-RECORDS.md](SERVICE-RECORDS.md) supersedes the
+older DOM-lifecycle attribution description above. The public CLI now seals a
+job/configuration intent before click, passively binds an exact outbound single
+RPC invocation to its own response's owning record, maps explicit record groups
+to a unique gallery tile, and checks the exact scoped output before original
+image/video download. It never falls back to DOM node differences, newest cards
+or later listProject responses as submit proof. Download resume navigates the
+known project's gallery and requires the durable record proof. URLs and raw POST
+bodies are not persisted; ordinary media receipts and budget guards are retained.
+
+This contract requires an explicit supported account route and a recognized
+nonempty owning-project baseline. Empty/new projects, unknown transport layouts
+or submit responses without an owning record remain unsupported and fail closed.
+Image info supplies the independent named model. Observed video history has no
+independent named-model label: its model proof uses the directly linked record
+plus the configuration verified before click, with no guessed model-code mapping
+or undocumented parameter slots. Unknown response parameter fields are hashed,
+not decoded or represented as independently verified settings.
+
+`flow.py reconcile --report ... --evidence ... --output ...` is a separate
+read-only offline audit of independent historical assertions. It accepts the
+original exhausted uncertain job without resetting its budget or rewriting any
+historical file. It **does not** authenticate the evidence's origin, clear the
+uncertainty, authorize a download or resubmit. See the exact schema and limits in
+SERVICE-RECORDS.md. The worker performed no live/profile/paid action. Offline
+Chromium acceptance must be recorded separately from sandbox launch failures.
