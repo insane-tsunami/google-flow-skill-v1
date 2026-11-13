@@ -46,19 +46,56 @@ async def test_flush_does_not_follow_continuously_added_tasks():
     observer = ServiceObserver(Page(), "1")
     observer.scope("project-1")
 
-    async def first():
-        task = asyncio.create_task(asyncio.Event().wait())
+    snapshot_started = asyncio.Event()
+    traffic_started = asyncio.Event()
+    owned = []
+
+    class SnapshotTasks(set):
+        snapshots = 0
+
+        def __iter__(self):
+            self.snapshots += 1
+            snapshot_started.set()
+            return super().__iter__()
+
+    observer.tasks = SnapshotTasks()
+
+    def track(coroutine):
+        task = asyncio.create_task(coroutine)
+        owned.append(task)
         observer.tasks.add(task)
         task.add_done_callback(observer.tasks.discard)
+        return task
 
-    task = asyncio.create_task(first())
-    observer.tasks.add(task)
-    task.add_done_callback(observer.tasks.discard)
-    await asyncio.wait_for(observer.flush(timeout=0.1), timeout=1)
-    pending = list(observer.tasks)
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
+    async def first():
+        await traffic_started.wait()
+
+    async def continuous_traffic():
+        # wait_for schedules flush separately on Python 3.10. Do not let the
+        # producer race ahead of its snapshot: pre-snapshot tasks must be waited.
+        await snapshot_started.wait()
+        while True:
+            track(asyncio.Event().wait())
+            if len(owned) >= 3:
+                traffic_started.set()
+            await asyncio.sleep(0)
+
+    initial = track(first())
+    producer = asyncio.create_task(continuous_traffic())
+    try:
+        await asyncio.wait_for(observer.flush(timeout=0.1), timeout=1)
+        assert initial.done()
+        assert traffic_started.is_set()
+        assert len(owned) >= 3
+        assert all(not task.done() for task in owned[1:])
+        assert observer.tasks.snapshots == 1
+        assert not observer.error
+    finally:
+        producer.cancel()
+        await asyncio.gather(producer, return_exceptions=True)
+        for task in owned:
+            task.cancel()
+        await asyncio.gather(*owned, return_exceptions=True)
 
 
 @pytest.mark.parametrize("rpc", ["search", "listProject", "unknown"])
