@@ -58,6 +58,9 @@ async def test_real_browser_fault_boundaries(page, tmp_path, monkeypatch, fault)
     adapter.project_id = "offline"
     adapter.service = ServiceObserver(page, "1")
     adapter.service.scope("offline")
+    from flow_provider.service_records import GenerationInvocationContract
+
+    adapter.generation_contract = GenerationInvocationContract("synthetic-generation", (0,), (1,))
     await page.evaluate("fetch('/u/1/_/AiSandboxAngularFrontend/data/batchexecute')")
     await adapter.service.flush()
     adapter.refs = []

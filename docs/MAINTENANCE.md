@@ -381,11 +381,13 @@ changing voice, filling prompts, invoking generation or modifying profile data.
 ## Passive service attribution (issue #12)
 
 The service contract in [SERVICE-RECORDS.md](SERVICE-RECORDS.md) supersedes the
-older DOM-lifecycle attribution description above. The public CLI now seals a
-job/configuration intent before click, passively binds an exact outbound single
-RPC invocation to its own response's owning record, maps explicit record groups
-to a unique gallery tile, and checks the exact scoped output before original
-image/video download. It never falls back to DOM node differences, newest cards
+older DOM-lifecycle attribution description above. With an independently observed
+provider-installed generation invocation contract, the conditional adapter seals a
+job/configuration intent before click, binds its exact outbound single RPC to its
+own response's owning record, maps explicit record groups to the gallery, and
+checks scoped output before original download. The real invocation contract is
+currently absent: fresh production submission is deliberately gated before the
+paid click. Synthetic fixtures do not remove this blocker. It never falls back to DOM node differences, newest cards
 or later listProject responses as submit proof. Download resume navigates the
 known project's gallery and requires the durable record proof. URLs and raw POST
 bodies are not persisted; ordinary media receipts and budget guards are retained.
